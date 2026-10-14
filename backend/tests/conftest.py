@@ -13,6 +13,7 @@ def config(tmp_path):
     (dist / "index.html").write_text("<html><body>screening-tool setup</body></html>")
     return Config(
         secret_key=Fernet.generate_key().decode(),
+        scheduler_enabled=False,
         database_url=f"sqlite:///{tmp_path / 'test.db'}",
         frontend_dist=dist,
         allowed_hosts=["testserver", "localhost", "127.0.0.1"],

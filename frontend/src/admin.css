@@ -228,3 +228,10 @@
     flex: 1;
   }
 }
+
+.auto-clear-dialog { width: min(620px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; margin: auto; padding: 24px; }
+.auto-clear-dialog::backdrop { background: #172d3570; }
+
+.settings-panel input[type="range"] { accent-color: #176b61; }
+
+.admin-details code { overflow-wrap: anywhere; }

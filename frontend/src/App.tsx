@@ -7,6 +7,10 @@ import { Parties, PartyFile } from "./Parties";
 import { Audit } from "./Audit";
 import { CSLPanel } from "./CSLPanel";
 import { Sources } from "./Sources";
+import { NotificationSettings, NotificationsBanner } from "./NotificationSettings";
+import { MonitoringPanel, MonitoringSummary } from "./MonitoringPanel";
+import { AutoClearControls } from "./AutoClearControls";
+import { RetentionControls } from "./RetentionControls";
 import { SettingsControls } from "./SettingsControls";
 import { UsersPanel } from "./UsersPanel";
 import { AcceptInvite } from "./AcceptInvite";
@@ -295,6 +299,10 @@ function Settings({
         </dl>
       </section>
       <SettingsControls session={session} />
+      <AutoClearControls session={session} />
+      <MonitoringPanel session={session} />
+      <NotificationSettings session={session} />
+      <RetentionControls session={session} />
       <UsersPanel session={session} />
       <CSLPanel />
       <section className="panel settings-panel">
@@ -391,11 +399,12 @@ function Workspace({
         </header>
         <main id="main-content" className="page-content">
           <ErrorMessage error={logout.error} />
+          <NotificationsBanner session={session} />
           <Routes>
-            <Route path="/" element={<Home session={session} />} />
+            <Route path="/" element={<><Home session={session} /><MonitoringSummary session={session} /></>} />
             <Route path="/queue" element={<ReviewQueue />} />
             <Route path="/parties" element={<Parties />} />
-            <Route path="/parties/:id" element={<PartyFile />} />
+            <Route path="/parties/:id" element={<PartyFile session={session} />} />
             <Route path="/audit" element={<Audit />} />
             <Route path="/sources" element={<Sources session={session} />} />
             <Route

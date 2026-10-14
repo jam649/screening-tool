@@ -18,6 +18,12 @@ export type WorkspaceSettings = {
   display_name: string;
   timezone: string;
   retention_years: number | null;
+  auto_clear_enabled: boolean;
+  auto_clear_threshold: number;
+  auto_clear_acknowledgment_audit_id: string | null;
+  auto_clear_notice?: string;
+  auto_clear_acknowledgment_valid?: boolean;
+  pending_screening_task_id?: string | null;
   candidate_min: number;
   review_threshold: number;
   likely_threshold: number;
@@ -30,9 +36,9 @@ export type WorkspaceSettings = {
 };
 export type WritableSetting = Exclude<
   keyof WorkspaceSettings,
-  "disclaimer" | "disclaimer_url"
+  "disclaimer" | "disclaimer_url" | "auto_clear_acknowledgment_audit_id" | "pending_screening_task_id" | "auto_clear_notice" | "auto_clear_acknowledgment_valid"
 >;
-export type SettingsChanges = Partial<Pick<WorkspaceSettings, WritableSetting>>;
+export type SettingsChanges = Partial<Pick<WorkspaceSettings, WritableSetting>> & { auto_clear_acknowledgment?: string };
 
 export type Role = User["role"];
 export type UserChanges = { role?: Role; active?: boolean };
@@ -48,7 +54,8 @@ export type Invitation = {
 export type UsersResponse = { items: User[]; invitations: Invitation[] };
 export type CreatedInvitation = Invitation & {
   invite_url: string;
-  delivery: "manual";
+  delivery: "manual" | "queued";
+  batch_id?: string | null;
   delivery_pending: boolean;
   delivery_message: string;
 };
@@ -62,6 +69,8 @@ export const adminKeys = {
 
 // Query families (owned by other packages) whose results depend on screening settings.
 const SETTINGS_DEPENDENT = new Set([
+  "monitoring",
+  "retention",
   "dashboard",
   "overview",
   "parties",

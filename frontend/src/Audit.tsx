@@ -1,3 +1,4 @@
+import { FullAuditExport, RunExports } from "./ExportControls";
 import { useId, useState, type FormEvent } from "react";
 import { Hash, LocalTime } from "./CSLPanel";
 import { formatCount } from "./csl";
@@ -75,6 +76,7 @@ function RunSummary({ run }: { run: Run }) {
           {run.finished_at ? (took ? `Finished in ${took}` : "Finished") : "In progress"}
         </span>
       </summary>
+      <RunExports id={run.id} />
       <dl className="detail-list">
         <Fact label="Run ID"><Hash value={run.id} /></Fact>
         <Fact label="List version"><Hash value={run.csl_version_id} /></Fact>
@@ -242,6 +244,7 @@ export function Audit() {
           </p>
         </div>
       </header>
+      <FullAuditExport />
       <RunsSection />
       <AuditLogSection />
     </>

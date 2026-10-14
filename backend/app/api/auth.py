@@ -125,6 +125,12 @@ def setup(body: SetupBody, request: Request, response: Response, db: DB):
         user.id,
         after={"disclaimer": DISCLAIMER, "source_url": DISCLAIMER_URL},
     )
+    if db.scalar(select(Setting).where(Setting.key == "timezone")) is None:
+        db.add(
+            Setting(
+                key="timezone", value=request.app.state.config.default_timezone, encrypted=False
+            )
+        )
     token, session = create_session(db, user, request.app.state.config)
     db.commit()
     return session_response(user, session, token, response, request.app.state.config.session_hours)

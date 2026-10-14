@@ -35,6 +35,9 @@ const SETTINGS = {
   display_name: "Screening Tool",
   timezone: "UTC",
   retention_years: null as number | null,
+  auto_clear_enabled: false,
+  auto_clear_threshold: 65,
+  auto_clear_acknowledgment_audit_id: null,
   candidate_min: 50,
   review_threshold: 65,
   likely_threshold: 90,
@@ -81,6 +84,8 @@ async function mockApi(page: Page, { me, setup = () => SETUP, handle }: MockOpti
           ? user
             ? { body: user }
             : { status: 401, body: { detail: "Not authenticated" } }
+          : call.path === "/monitoring/status" ? { body: { enabled: true, schedules: [], operations: [], health: [] } }
+          : call.path === "/notifications/status" ? { body: { batches: [], health: [] } }
           : { status: 404, body: { detail: "Not available in this test" } });
     await route.fulfill({ status: reply.status ?? 200, contentType: "application/json", body: JSON.stringify(reply.body ?? null) });
   });
@@ -165,7 +170,7 @@ test("settings validate retention, thresholds and weights, and keep edits after 
   await page.getByLabel("Review threshold").fill("95");
   await save.click();
   await expect(page.getByText(/higher than the likely match threshold/)).toBeVisible();
-  await page.getByLabel("Review threshold").fill("70");
+  await page.getByLabel("Review threshold").fill("60");
   await page.getByText("Advanced scoring").click();
   await page.getByLabel("Token set weight").fill("0.6");
   await save.click();
@@ -179,9 +184,50 @@ test("settings validate retention, thresholds and weights, and keep edits after 
   await page.getByLabel("Country mismatch", { exact: true }).fill("-20");
   await save.click();
   await expect(page.getByRole("alert").filter({ hasText: "Synthetic rejection" })).toBeVisible();
-  expect(patches()[1].body).toEqual({ review_threshold: 70, score_weights: { ...WEIGHTS, country_mismatch: -20 } });
-  await expect(page.getByLabel("Review threshold")).toHaveValue("70");
+  expect(patches()[1].body).toEqual({ review_threshold: 60, score_weights: { ...WEIGHTS, country_mismatch: -20 } });
+  await expect(page.getByLabel("Review threshold")).toHaveValue("60");
   await expect(page.getByLabel("Country mismatch", { exact: true })).toHaveValue("-20");
+});
+
+test("moving review or likely bounds past auto-clear needs an explicit joint threshold", async ({ page }) => {
+  const settings = structuredClone(SETTINGS);
+  const calls = await mockApi(page, {
+    me: () => sessionFor(ADMIN),
+    handle: ({ method, path, body }) => {
+      if (path !== "/settings") return;
+      if (method === "PATCH") Object.assign(settings, body, { pending_screening_task_id: "task-synthetic-1" });
+      return { body: settings };
+    },
+  });
+  const patches = () => calls.filter((call) => call.method === "PATCH");
+  await page.goto("/settings");
+  const auto = page.getByLabel("Auto-clear threshold for these bounds", { exact: true });
+  const save = page.getByRole("button", { name: "Save screening settings" });
+  await expect(page.getByLabel("Review threshold")).toHaveValue("65");
+  await expect(auto).toHaveCount(0);
+
+  await page.getByLabel("Review threshold").fill("70");
+  await expect(auto).toHaveValue("65");
+  await expect(page.getByText(/is outside the proposed\s+bounds of 70 to 90/)).toBeVisible();
+  await save.click();
+  await expect(page.getByText(/^Choose an auto-clear threshold from 70 to 90/)).toBeVisible();
+  await expect(auto).toHaveValue("65");
+  expect(patches()).toHaveLength(0);
+
+  await auto.fill("75");
+  await save.click();
+  await expect(page.getByText(/A full screening was queued/)).toBeVisible();
+  expect(patches()).toHaveLength(1);
+  expect(patches()[0].body).toEqual({ review_threshold: 70, auto_clear_threshold: 75 });
+  expect(patches()[0].headers["x-csrf-token"]).toBe("csrf-u-avery");
+  await expect(auto).toHaveCount(0);
+
+  await page.getByLabel("Likely match threshold").fill("72");
+  await expect(auto).toHaveValue("75");
+  await expect(page.getByText(/is outside the proposed\s+bounds of 70 to 72/)).toBeVisible();
+  await save.click();
+  await expect(page.getByText(/^Choose an auto-clear threshold from 70 to 72/)).toBeVisible();
+  expect(patches()).toHaveLength(1);
 });
 
 test("users guard the last active Admin and surface a server 409", async ({ page }) => {

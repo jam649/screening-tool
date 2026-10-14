@@ -29,6 +29,9 @@ test("first run gates protected pages and requires the supplied disclaimer befor
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (route.request().method() === "GET" && (path === "/notifications/status" || path === "/api/v1/notifications/status")) return route.fulfill({ json: { batches: [], health: [] } });
+    if (route.request().method() === "GET" && (path === "/monitoring/status" || path === "/api/v1/monitoring/status")) return route.fulfill({ json: { enabled: true, schedules: [], operations: [], health: [] } });
+    if (route.request().method() === "GET" && (path === "/settings/monitoring" || path === "/api/v1/settings/monitoring")) return route.fulfill({ json: { csl_fetch_time: "05:00", source_poll_minutes: 15, retention_weekday: "sun", retention_time: "03:00" } });
     if (path === "/api/v1/dashboard") return route.fulfill({ json: { total_parties: 0, csl_version: null } });
     if (path.endsWith("/setup") && request.method() === "GET")
       return route.fulfill({ json: { ...setup, needs_setup: !created } });
@@ -96,6 +99,9 @@ test("Reviewer does not receive Settings navigation and rejected sign-in display
   const reviewer = { ...session, user: { ...session.user, role: "reviewer" } };
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === "GET" && (path === "/notifications/status" || path === "/api/v1/notifications/status")) return route.fulfill({ json: { batches: [], health: [] } });
+    if (route.request().method() === "GET" && (path === "/monitoring/status" || path === "/api/v1/monitoring/status")) return route.fulfill({ json: { enabled: true, schedules: [], operations: [], health: [] } });
+    if (route.request().method() === "GET" && (path === "/settings/monitoring" || path === "/api/v1/settings/monitoring")) return route.fulfill({ json: { csl_fetch_time: "05:00", source_poll_minutes: 15, retention_weekday: "sun", retention_time: "03:00" } });
     if (path === "/api/v1/dashboard") return route.fulfill({ json: { total_parties: 0, csl_version: null } });
     if (path.endsWith("/setup"))
       return route.fulfill({ json: { ...setup, needs_setup: false } });

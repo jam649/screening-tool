@@ -19,12 +19,27 @@ def create_database_engine(config: Config) -> Engine:
     )
 
     @event.listens_for(engine, "connect")
-    def sqlite_settings(connection, _):
+    def sqlite_settings(connection, record):
+        capability: set[tuple[str, str]] = set()
+        record.info["retention_delete_capability"] = capability
+        connection.create_function(
+            "retention_delete_allowed",
+            2,
+            lambda table, row_id: int((str(table), str(row_id)) in capability),
+        )
         cursor = connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA busy_timeout=10000")
         cursor.close()
+
+    @event.listens_for(engine, "checkin")
+    def clear_retention_capability(connection, record):
+        record.info.get("retention_delete_capability", set()).clear()
+
+    @event.listens_for(engine, "rollback")
+    def clear_retention_on_rollback(connection):
+        connection.info.get("retention_delete_capability", set()).clear()
 
     return engine
 
@@ -42,5 +57,6 @@ def migrate(engine: Engine) -> None:
         command.upgrade(config, "head")
 
 
-def session_factory(engine: Engine) -> sessionmaker[Session]:
-    return sessionmaker(engine, expire_on_commit=False)
+def session_factory(engine: Engine, config: Config | None = None) -> sessionmaker[Session]:
+    info = {"config": config} if config is not None else {}
+    return sessionmaker(engine, expire_on_commit=False, info=info)

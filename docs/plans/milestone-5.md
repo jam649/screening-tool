@@ -1,6 +1,6 @@
 # Milestone 5: monitoring, notifications, exports and retention
 
-Status: implementation plan only. Do not begin milestone 5 implementation until the real Reviewer browser gate for milestone 4 passes. Source of truth: [design-v1.md](../design-v1.md), especially sections 6.3, 7.4, 7.8, 8.3–8.7, 9 and 10. Existing milestone 4 APIs, canonical queue selection, immutable snapshots, explicit run manifests, valid empty CSV snapshots, and the frozen fixture contract remain authoritative.
+Status: implemented and locally verified 2026-10-14 after signed milestone 4 checkpoint 07717c6. Actual monitoring, report, export, restart and browser evidence is recorded in docs/milestones/5.md; this plan describes the implementation contracts.
 
 ## Ownership and integration boundaries
 
@@ -25,18 +25,18 @@ False positives persist one suppression on the exact party ID, entry ID, party h
 
 ## Persistent scheduler and command execution
 
-Use a verified, pinned stable APScheduler 3.x release with `SQLAlchemyJobStore` in the existing SQLite store and one scheduler in the single API process. The [official scheduler guide](https://apscheduler.readthedocs.io/en/3.x/userguide.html) requires stable job IDs and globally accessible serializable callables; [SQLAlchemyJobStore](https://apscheduler.readthedocs.io/en/3.x/modules/jobstores/sqlalchemy.html) provides persistence. Pass only nonsecret IDs and fixed command identifiers as job arguments. Do not serialize passwords, API keys, full customer records or application/session objects into scheduler jobs.
+Use the verified pinned APScheduler 3.11.3 release and one scheduler in the single API process. The implementation uses an allowlisted JSON `BaseJobStore` backed by SQLAlchemy tables in the existing SQLite store; it avoids executable pickle and persists only fixed callback arguments and validated cron/interval definitions. The [official scheduler guide](https://apscheduler.readthedocs.io/en/3.x/userguide.html) requires stable job IDs and globally accessible serializable callables; The standard [SQLAlchemyJobStore](https://apscheduler.readthedocs.io/en/3.x/modules/jobstores/sqlalchemy.html) documents the SQLite persistence integration; the application supplies its JSON serialization in place of pickle. Pass only nonsecret IDs and fixed command identifiers as job arguments. Do not serialize passwords, API keys, full customer records or application/session objects into scheduler jobs.
 
 Register schedules after migrations and encryption-key validation. Start paused, reconcile jobs by stable ID, preserve an unchanged job's stored next-run time, remove schedules whose source no longer applies, then resume. Changing a schedule deliberately recalculates its trigger and records an audit event. Startup must not reset every existing job into the future and lose a missed run. Configure coalescing and one instance per job, with a documented catch-up grace period; perform one durable recovery cycle on restart when monitoring was interrupted. Shut down the scheduler before disposing its engine.
 
 | Stable job ID | Default | Operator command and behavior |
 | --- | --- | --- |
-| `csl-refresh` | Daily 05:00 in configured IANA timezone; server timezone initially, UTC fallback | `screening-tool csl refresh`; successful added/changed entries enqueue scoped list work; removed entries close through immutable system decisions |
-| `source-sync:<uuid>` | Every 15 minutes for configured QBO/BC sources | `screening-tool sync <uuid>`; CSV remains an explicit upload/manual sync, never an invented remote poll |
-| `screen-changed` | Immediately after successful refresh/sync and a short recovery polling interval | `screening-tool screen --changed`; consume durable pending/failed work atomically, with actual current inputs |
-| `morning-report` | Daily 07:00 in configured timezone | `screening-tool report send` |
-| `alert-outbox` | Immediately after a committed run and periodically for recoverable retries | `screening-tool alert send` |
-| `retention-apply` | Weekly | `screening-tool retention apply`; disabled policy exits without deleting data |
+| `csl-daily` | Daily 05:00 in configured IANA timezone; server timezone initially, UTC fallback | `screening-tool csl refresh`; successful added/changed entries enqueue scoped list work; removed entries close through immutable system decisions |
+| `source-<uuid>` | Every 15 minutes for configured QBO/BC sources | `screening-tool sync <uuid>`; CSV remains an explicit upload/manual sync, never an invented remote poll |
+| `screen-recovery` | Immediately after successful refresh/sync and a short recovery polling interval | `screening-tool screen --changed`; consume durable pending/failed work atomically, with actual current inputs |
+| `morning-daily` | Daily 07:00 in configured timezone | `screening-tool report send` |
+| `outbox-recovery` | Immediately after a committed run and periodically for recoverable retries | `screening-tool alert send` |
+| `retention-weekly` | Weekly | `screening-tool retention apply`; disabled policy exits without deleting data |
 
 Each scheduled operation must be runnable through its documented CLI command. Keep one business implementation behind API, CLI and scheduler entrypoints. A global serialized scheduler dispatch callable may invoke the fixed console command argument list without a shell; alternatively the common command dispatcher must exercise the same command implementation. Capture sanitized status, not full customer-bearing command output. Never put credentials in arguments. API/CLI operator invocations also use the same persistent overlap protection.
 

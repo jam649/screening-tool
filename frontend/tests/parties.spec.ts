@@ -183,6 +183,9 @@ async function mockApi(page: Page, handle: (path: string, url: URL) => unknown) 
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname.replace(/^\/api\/v1/, "");
+    if (route.request().method() === "GET" && (path === "/notifications/status" || path === "/api/v1/notifications/status")) return route.fulfill({ json: { batches: [], health: [] } });
+    if (route.request().method() === "GET" && (path === "/monitoring/status" || path === "/api/v1/monitoring/status")) return route.fulfill({ json: { enabled: true, schedules: [], operations: [], health: [] } });
+    if (route.request().method() === "GET" && (path === "/settings/monitoring" || path === "/api/v1/settings/monitoring")) return route.fulfill({ json: { csl_fetch_time: "05:00", source_poll_minutes: 15, retention_weekday: "sun", retention_time: "03:00" } });
     if (path === "/setup") return route.fulfill({ json: setup });
     if (path === "/auth/me") return route.fulfill({ json: reviewer });
     if (path === "/sources") return route.fulfill({ json: [source] });
@@ -409,4 +412,30 @@ test("Audit renders recorded run context and sends exact server-side action filt
   await filter.getByRole("button", { name: "Apply filters" }).click();
   await expect.poll(() => requests.at(-1)).toEqual({ action: "review.disposition", target_table: "dispositions", target_id: "decision-fp", offset: "0", limit: "100" });
   await expect(page.locator(".rv-audit")).toContainText("Morgan Lee (morgan@example.test)");
+});
+
+
+test("zero-hit participation and purged comparisons display actual permanent snapshots", async ({ page }) => {
+  const recorded = structuredClone(partyFile);
+  recorded.events = [
+    { ...recorded.events[0], zero_hits: true, hits: [], previously_cleared: { count: 0, hits: [] },
+      party_evidence: { party_snapshot: { name: "Historic zero-hit name" }, source_snapshot: { label: "Historic source" }, candidates_considered: 0, hits_recorded: 0, result_counts: {} } },
+    { ...recorded.events[1], zero_hits: false, hits: [], previously_cleared: { count: 0, hits: [] },
+      purged_comparisons: [{ certificate_id: "certificate-synthetic", certificate_sha256: "e".repeat(64),
+        hit: { party_snapshot: { name: "Historic purged name" }, entry_snapshot: { name: "Historic listing" }, final_confidence: 87 },
+        dispositions: [{ kind: "confirmed_match", note: "Synthetic original assessment", actor: { display_name: "Original Reviewer" } }] }] },
+  ] as typeof recorded.events;
+  await mockApi(page, path => path === "/parties/party-nw" ? recorded : undefined);
+  await page.goto("/parties/party-nw");
+  const zero = page.locator("li.rv-event").first();
+  await zero.getByText("Party record preserved for this run").click();
+  await expect(zero).toContainText("Historic zero-hit name");
+  await expect(zero).toContainText("Historic source");
+  const retained = page.locator("li.rv-event").nth(1);
+  await expect(retained).not.toContainText("No candidate hits recorded");
+  await retained.getByText("Comparison preserved in purge certificate").click();
+  await expect(retained).toContainText("Historic purged name");
+  await expect(retained).toContainText("Original Reviewer");
+  await expect(retained).toContainText("Synthetic original assessment");
+  await expect(retained).toContainText("certificate-synthetic");
 });

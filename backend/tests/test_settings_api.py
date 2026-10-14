@@ -15,6 +15,7 @@ def test_settings_validation_and_atomic_audit(client, admin):
             "timezone": "America/New_York",
             "retention_years": 5,
             "review_threshold": 70,
+            "auto_clear_threshold": 70,
         },
         headers=headers,
     )

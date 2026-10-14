@@ -1,6 +1,6 @@
 # Milestone 5 screening policy and monitoring contracts
 
-Status: implementation plan only. Start milestone 5 implementation after the coordinating agent records the Reviewer browser gate for milestone 4 as passed. The independent milestone 4 engine corrections are separate work; this plan does not authorize beginning auto-clear, scheduling or SMTP implementation early.
+Status: implemented and locally verified 2026-10-14 after signed milestone 4 checkpoint 07717c6. Actual monitoring, report, export, restart and browser evidence is recorded in docs/milestones/5.md; this plan describes the implementation contracts.
 
 Source: design sections [7.4–7.8](../design-v1.md#7-matching-and-adjudication) and [9](../design-v1.md#9-scheduling-and-continuous-monitoring). Coordinate with the general milestone 5 plan and its API/scheduler/report owners.
 

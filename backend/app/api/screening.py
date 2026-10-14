@@ -1,13 +1,20 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy import select
 
 from app.api.audit import run_summary_payload
 from app.api.deps import DB, AdminUser, CurrentUser
 from app.models import ScreeningRun
+from app.notifications.service import dispatch_outbox
+from app.scheduler.leases import (
+    OperationAuthorityError,
+    OperationBusyError,
+    operation_session,
+    protected_operation,
+)
 from app.screening.engine import ScreeningBusyError, run_payload, run_screening
 from app.screening.settings import ScreeningValidationError
 
@@ -27,13 +34,32 @@ class ScreenRequest(BaseModel):
 
 
 @router.post("")
-def screen(body: ScreenRequest, db: DB, user: AdminUser):
+def screen(
+    body: ScreenRequest, request: Request, background: BackgroundTasks, db: DB, user: AdminUser
+):
+    actor_id = user.id
+    db.rollback()
+    factory = request.app.state.session_factory
+    operation = "screen_party" if body.party_id else "screen_all"
     try:
-        run = run_screening(db, party_ids=[str(body.party_id)] if body.party_id else None)
+        with protected_operation(
+            factory,
+            operation,
+            actor_user_id=actor_id,
+            party_id=str(body.party_id) if body.party_id else None,
+        ) as execution:
+            with operation_session(factory, execution, actor_id) as operation_db:
+                run = run_screening(
+                    operation_db, party_ids=[str(body.party_id)] if body.party_id else None
+                )
+            execution.complete({"run_ids": [run.id]})
     except ScreeningValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
-    except ScreeningBusyError as exc:
+    except (ScreeningBusyError, OperationBusyError) as exc:
         raise HTTPException(409, str(exc)) from exc
+    except OperationAuthorityError:
+        raise HTTPException(403, "Active Admin role required") from None
+    background.add_task(dispatch_outbox, factory, request.app.state.config)
     return run_payload(run)
 
 

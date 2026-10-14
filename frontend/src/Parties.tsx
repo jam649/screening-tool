@@ -1,10 +1,13 @@
 import { useId, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { ApiError } from "./api";
+import { ApiError, type Session } from "./api";
+import { canAdminister } from "./adminApi";
+import { PartyRetentionControls } from "./RetentionControls";
+import { PartyExports, PartyViewExport } from "./ExportControls";
 import { AuditEntries } from "./Audit";
 import { Hash, LocalTime } from "./CSLPanel";
 import { formatCount } from "./csl";
-import { Fact, HitEvidence, LoadError, Pager, actorName } from "./ReviewQueue";
+import { JsonBlock, Fact, HitEvidence, LoadError, Pager, actorName } from "./ReviewQueue";
 import {
   PARTY_FILTER_KEYS,
   bucketLabel,
@@ -200,6 +203,7 @@ export function Parties() {
           <p className="rv-muted">Source names could not be loaded; other filters still work.</p>
         )}
       </form>
+      <PartyViewExport filters={filters} />
       {parties.isPending ? (
         <p className="rv-muted" role="status">
           Loading parties…
@@ -352,6 +356,24 @@ function RunEvent({ event }: { event: PartyEvent }) {
         <Fact label="Run ID"><Hash value={run.id} /></Fact>
         <Fact label="Party record hash"><Hash value={event.party_hash} /></Fact>
       </dl>
+      {event.party_evidence && (
+        <details className="rv-disclosure">
+          <summary>Party record preserved for this run</summary>
+          <p>{formatCount(event.party_evidence.candidates_considered)} candidates considered · {formatCount(event.party_evidence.hits_recorded)} hit records recorded.</p>
+          <JsonBlock value={event.party_evidence.party_snapshot} />
+          <h4>Source recorded for this run</h4><JsonBlock value={event.party_evidence.source_snapshot} />
+          <h4>Recorded results</h4><JsonBlock value={event.party_evidence.result_counts} />
+        </details>
+      )}
+      {(event.purged_comparisons ?? []).map((record, index) => (
+        <details className="rv-disclosure" key={`${record.certificate_id}:${index}`}>
+          <summary>Comparison preserved in purge certificate</summary>
+          <p>The original comparison and decisions remain in the permanent certificate after retention removed their database rows.</p>
+          <dl className="rv-facts"><Fact label="Certificate"><Hash value={record.certificate_id} /></Fact><Fact label="Certificate checksum"><Hash value={record.certificate_sha256} /></Fact></dl>
+          <h4>Original comparison</h4><JsonBlock value={record.hit} />
+          <h4>Original decisions and recorded actors</h4><JsonBlock value={record.dispositions} />
+        </details>
+      ))}
       {event.zero_hits ? (
         <p className="rv-zero">No candidate hits recorded in this run.</p>
       ) : (
@@ -381,7 +403,7 @@ function RunEvent({ event }: { event: PartyEvent }) {
   );
 }
 
-export function PartyFile() {
+export function PartyFile({ session }: { session: Session }) {
   const { id = "" } = useParams();
   const file = usePartyFile(id);
   const currentId = useId();
@@ -434,7 +456,7 @@ export function PartyFile() {
             record exactly as it was compared.
           </p>
         </div>
-        <StatusBadge party={party} />
+        <div><StatusBadge party={party} /><PartyExports id={id} /></div>
       </header>
       <section className="panel rv-section" aria-labelledby={currentId}>
         <h2 id={currentId}>Current record</h2>
@@ -467,6 +489,7 @@ export function PartyFile() {
           <Fact label="Party ID"><Hash value={party.id} /></Fact>
         </dl>
       </section>
+      {canAdminister(session) && <section className="panel rv-section"><PartyRetentionControls session={session} partyId={id} /></section>}
       <section className="panel rv-section" aria-labelledby={historyId}>
         <h2 id={historyId}>Screening history</h2>
         {events.length === 0 ? (

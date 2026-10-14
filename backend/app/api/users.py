@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from sqlalchemy import delete, func, select
 
@@ -105,7 +105,9 @@ def users(user: AdminUser, db: DB):
 
 
 @router.post("/users/invitations", status_code=201)
-def invite(body: InvitationBody, user: AdminUser, db: DB):
+def invite(
+    body: InvitationBody, request: Request, background: BackgroundTasks, user: AdminUser, db: DB
+):
     actor_id = user.id
     begin_write(db)
     validate_admin(db, actor_id)
@@ -147,13 +149,27 @@ def invite(body: InvitationBody, user: AdminUser, db: DB):
             for key, value in invitation_payload(row).items()
         },
     )
+    from app.notifications.service import dispatch_outbox, enqueue_invitation
+
+    batch = enqueue_invitation(db, request.app.state.config, row, token)
     db.commit()
+    if batch:
+        background.add_task(
+            dispatch_outbox,
+            request.app.state.session_factory,
+            request.app.state.config,
+            batch_id=batch.id,
+            force=True,
+        )
     return {
         **invitation_payload(row),
+        "batch_id": batch.id if batch else None,
         "invite_url": f"/accept-invite#token={token}",
-        "delivery": "manual",
+        "delivery": "queued" if batch else "manual",
         "delivery_pending": True,
-        "delivery_message": "Copy this invitation link for the recipient. SMTP is not configured.",
+        "delivery_message": "Email delivery queued. The manual link remains available."
+        if batch
+        else "Copy this invitation link for the recipient. SMTP is not configured.",
     }
 
 

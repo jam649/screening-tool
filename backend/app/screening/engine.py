@@ -27,9 +27,11 @@ from app.models import (
     Party,
     ScreeningRun,
     ScreeningTask,
+    Source,
     Suppression,
     utcnow,
 )
+from app.models.evidence import RunPartyEvidence
 from app.screening.candidates import CandidateIndex
 from app.screening.normalize import party_record_hash
 from app.screening.score import bucket, score_pair
@@ -185,7 +187,10 @@ def _execute(
     if version is None:
         raise ScreeningValidationError("Fetch the CSL before screening parties")
     settings = load_settings(db)
-    context_hash = canonical_hash(settings.snapshot())
+    context_hash = canonical_hash(settings.scoring_snapshot())
+    decision_context = canonical_hash(
+        {"scoring_context": context_hash, "auto_clear_policy": settings.auto_clear_snapshot()}
+    )
     parties_query = select(Party).where(Party.deleted_at.is_(None))
     if party_ids is not None:
         parties_query = parties_query.where(Party.id.in_(party_ids))
@@ -221,6 +226,8 @@ def _execute(
     index = CandidateIndex(entries, settings)
     run_snapshot = {
         **settings.snapshot(),
+        "scoring_context": context_hash,
+        "decision_context": decision_context,
         "hash_rule_version": HASH_RULE_VERSION,
         "scope": {
             "party_ids": [party.id for party in parties],
@@ -284,6 +291,12 @@ def _execute(
                 false_positive_decisions.setdefault(exact_pair, disposition)
     scoped_entries = {entry.id: entry for entry in entries}
     party_hashes = {party.id: party.record_hash for party in parties}
+    sources = {
+        source.id: source
+        for source in db.scalars(
+            select(Source).where(Source.id.in_({party.source_id for party in parties}))
+        )
+    }
     forced: dict[str, set[str]] = {}
     for hit in existing_hits:
         current_entry = scoped_entries.get(hit.csl_entry_id)
@@ -296,6 +309,19 @@ def _execute(
         ):
             forced.setdefault(hit.party_id, set()).add(hit.csl_entry_id)
     for party in parties:
+        original_party = snapshot(party)
+        counts = {
+            key: 0
+            for key in (
+                "low",
+                "review",
+                "likely",
+                "suppressed",
+                "auto_cleared",
+                "completed_human",
+                "new_queue",
+            )
+        }
         candidates, fallback = index.candidates(party)
         candidate_ids = {entry.id for entry in candidates}
         candidates.extend(
@@ -306,9 +332,16 @@ def _execute(
             scored = score_pair(party, entry, settings)
             if scored.score < settings.candidate_min:
                 continue
-            party_snapshot, entry_snapshot = snapshot(party), snapshot(entry)
+            party_snapshot, entry_snapshot = deepcopy(original_party), snapshot(entry)
             explanation = scored.explanation
-            explanation.update({"blocking_fallback": fallback, "queue_context": context_hash})
+            explanation.update(
+                {
+                    "blocking_fallback": fallback,
+                    "queue_context": context_hash,
+                    "decision_context": decision_context,
+                    "auto_clear_policy": settings.auto_clear_snapshot(),
+                }
+            )
             exact_key = party.id, entry.id, party.record_hash, entry.entry_hash
             suppression = exact_suppressions.get(exact_key)
             prior = prior_suppressions.get((party.id, entry.id))
@@ -385,7 +418,11 @@ def _execute(
                 and scored.score >= settings.review_threshold - 10
             ):
                 result = adjudicate(
-                    party_snapshot, entry_snapshot, scored.score, deepcopy(explanation), settings
+                    deepcopy(party_snapshot),
+                    deepcopy(entry_snapshot),
+                    scored.score,
+                    deepcopy(explanation),
+                    settings,
                 )
             confidence = (
                 scored.score if result.final_confidence is None else result.final_confidence
@@ -395,8 +432,18 @@ def _execute(
             ):
                 raise ScreeningValidationError("Adjudication returned invalid confidence")
             hit_bucket = bucket(confidence, settings, scored.score)
-            anchor = completed_anchor or (
-                anchors.get((*exact_key, context_hash)) if hit_bucket != "low" else None
+            auto_clear = (
+                not suppression
+                and not completed_decision
+                and settings.auto_clear_enabled
+                and hit_bucket == "review"
+                and confidence < settings.auto_clear_threshold
+            )
+            anchor = (
+                None
+                if auto_clear
+                else completed_anchor
+                or (anchors.get((*exact_key, context_hash)) if hit_bucket != "low" else None)
             )
             if anchor and not suppression:
                 explanation["queue_anchor_hit_id"] = anchor.id
@@ -404,6 +451,11 @@ def _execute(
                 explanation["completed_disposition_id"] = completed_decision.id
             if entry.id in forced.get(party.id, set()):
                 explanation["prior_pair_forced_candidate"] = True
+            if auto_clear:
+                explanation["auto_clear"] = {
+                    "threshold": settings.auto_clear_threshold,
+                    "acknowledgment_audit_id": settings.auto_clear_acknowledgment_audit_id,
+                }
             hit = Hit(
                 run_id=run.id,
                 party_id=party.id,
@@ -420,17 +472,83 @@ def _execute(
                 entry_snapshot=entry_snapshot,
             )
             db.add(hit)
+            counts[hit_bucket] += 1
             if suppression:
                 run.hits_suppressed += 1
+                counts["suppressed"] += 1
+            elif auto_clear:
+                db.flush()
+                requested_actor = db.info.pop("actor_user_id", None)
+                try:
+                    model = result.model_name or "none (deterministic-only)"
+                    decision = Disposition(
+                        hit_id=hit.id,
+                        kind="auto_cleared",
+                        actor_user_id=None,
+                        slider_value_at_time=settings.auto_clear_threshold,
+                        note=f"Auto-clear in run {run.id}; "
+                        f"threshold={settings.auto_clear_threshold}; "
+                        f"model={model}; det_score={scored.score}; "
+                        f"model_prob={result.model_prob}; final_confidence={confidence}.",
+                    )
+                    db.add(decision)
+                    db.flush()
+                    hit.status = "dispositioned"
+                    audit(
+                        db,
+                        "screening.auto_cleared",
+                        "dispositions",
+                        decision.id,
+                        after={
+                            "run_id": run.id,
+                            "hit_id": hit.id,
+                            "party_id": party.id,
+                            "threshold": settings.auto_clear_threshold,
+                            "det_score": scored.score,
+                            "model_prob": result.model_prob,
+                            "final_confidence": confidence,
+                            "model_name": result.model_name,
+                            "decision_context": decision_context,
+                            "acknowledgment_audit_id": settings.auto_clear_acknowledgment_audit_id,
+                        },
+                    )
+                    db.flush()
+                finally:
+                    if requested_actor is not None:
+                        db.info["actor_user_id"] = requested_actor
+                run.auto_cleared += 1
+                counts["auto_cleared"] += 1
             elif hit_bucket != "low" and not anchor:
                 run.hits_new += 1
+                counts["new_queue"] += 1
+            if completed_decision is not None:
+                counts["completed_human"] += 1
             if result.model_name:
                 run.model_name = result.model_name
             if result.fallback:
                 run.model_fallbacks = [*run.model_fallbacks, redact_credentials(result.fallback)]
+        source = sources[party.source_id]
+        db.add(
+            RunPartyEvidence(
+                run_id=run.id,
+                party_id=party.id,
+                party_hash=party.record_hash,
+                party_snapshot=original_party,
+                source_snapshot={"id": source.id, "kind": source.kind, "label": source.label},
+                scoring_context=context_hash,
+                decision_context=decision_context,
+                candidates_considered=len(candidates),
+                hits_recorded=sum(counts[key] for key in ("low", "review", "likely")),
+                result_counts=counts,
+            )
+        )
         # Audit listeners can otherwise accumulate an entire book in one flush.
         if run.parties_screened % 100 == 0:
             db.flush()
+    db.flush()
+    from app.notifications.service import enqueue_likely_alert
+
+    enqueue_likely_alert(db, run)
     run.finished_at = utcnow()
     db.flush()
     audit(db, "screening.completed", "screening_runs", run.id, after=run_payload(run))

@@ -5,7 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
@@ -15,6 +15,13 @@ from app.audit import audit
 from app.connectors.csv import UploadValidationError, preview_upload
 from app.connectors.sync import sync_csv
 from app.models import Source, utcnow
+from app.notifications.service import dispatch_outbox
+from app.scheduler.leases import (
+    OperationAuthorityError,
+    OperationBusyError,
+    operation_session,
+    protected_operation,
+)
 from app.screening.engine import ScreeningTasksFailedError, process_pending_tasks
 
 router = APIRouter(prefix="/sources", tags=["sources"])
@@ -137,6 +144,7 @@ def rename_source(source_id: str, body: SourceCreate, db: DB, user: AdminUser):
 @router.post("/{source_id}/upload")
 def upload(
     source_id: str,
+    request: Request,
     db: DB,
     user: AdminUser,
     file: Annotated[UploadFile, File()],
@@ -154,19 +162,65 @@ def upload(
             raise HTTPException(422, "The column mapping must be a JSON object") from exc
         if not isinstance(selected, dict):
             raise HTTPException(422, "The column mapping must be a JSON object")
+    actor_id = user.id
+    db.rollback()
+    factory = request.app.state.session_factory
     try:
-        result = sync_csv(db, source, data, filename, selected)
+        with protected_operation(
+            factory, "source_import", source_id=source_id, actor_user_id=actor_id
+        ) as execution:
+            with operation_session(factory, execution, actor_id) as operation_db:
+                source = get_source(operation_db, source_id)
+                result = sync_csv(operation_db, source, data, filename, selected)
+                imported_source = source_payload(source)
+            execution.complete(
+                {
+                    "source_id": source_id,
+                    "applied": result.applied,
+                    "added": result.added,
+                    "changed": result.changed,
+                    "unchanged": result.unchanged,
+                    "deleted": result.deleted,
+                    "task_ids": result.task_ids,
+                }
+            )
     except UploadValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
+    except OperationBusyError:
+        raise HTTPException(409, "This source is syncing or the database is busy") from None
+    except OperationAuthorityError:
+        raise HTTPException(403, "Active Admin role required") from None
     screening_errors = []
-    try:
-        runs = process_pending_tasks(db) if result.applied else []
-    except ScreeningTasksFailedError as exc:
-        runs = exc.completed_runs
-        screening_errors = exc.failures
+    runs = []
+    if result.applied:
+        try:
+            with protected_operation(
+                factory, "screen_changed", actor_user_id=actor_id
+            ) as execution:
+                with operation_session(factory, execution, actor_id) as operation_db:
+                    try:
+                        runs = process_pending_tasks(operation_db)
+                    except ScreeningTasksFailedError as exc:
+                        execution.complete(
+                            {
+                                "run_ids": [run.id for run in exc.completed_runs],
+                                "failed_task_ids": [row["task_id"] for row in exc.failures],
+                            }
+                        )
+                        raise
+                execution.complete({"run_ids": [run.id for run in runs]})
+        except ScreeningTasksFailedError as exc:
+            runs, screening_errors = exc.completed_runs, exc.failures
+        except (OperationBusyError, OperationAuthorityError):
+            screening_errors = [{"error": "Screening is deferred; monitoring will retry."}]
+        # Committed evidence always survives a notification failure.
+        try:
+            dispatch_outbox(factory, request.app.state.config)
+        except Exception:
+            pass  # Outbox/operation health reports delivery failures independently.
     return {
         **result.payload(),
-        "source": source_payload(source),
+        "source": imported_source,
         "screening_run_ids": [run.id for run in runs],
         "screening_errors": screening_errors,
         "screening_pending": bool(screening_errors),

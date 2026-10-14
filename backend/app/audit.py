@@ -10,7 +10,15 @@ from app.models import (
     AuditLog,
     Disposition,
     Hit,
+    NotificationBatch,
+    NotificationDelivery,
+    OperationAttempt,
     Party,
+    RetentionAttestation,
+    RetentionHold,
+    RetentionHoldRelease,
+    RetentionPurgeCertificate,
+    RunPartyEvidence,
     ScreeningRun,
     Setting,
     Source,
@@ -25,7 +33,6 @@ PUBLIC_SETTING_KEYS = frozenset(
         "display_name",
         "timezone",
         "retention_years",
-        "retention_enabled",
         "candidate_min",
         "legal_suffixes",
         "score_weights",
@@ -41,6 +48,12 @@ PUBLIC_SETTING_KEYS = frozenset(
         "model_enabled",
         "model_provider",
         "model_name",
+        "auto_clear_acknowledgment_audit_id",
+        "public_base_url",
+        "csl_fetch_time",
+        "source_poll_minutes",
+        "retention_weekday",
+        "retention_time",
         "report_time",
         "report_timezone",
         "likely_alerts_enabled",
@@ -183,10 +196,64 @@ def _snapshot(obj: Any, before: bool = False) -> dict:
 
 @event.listens_for(Session, "before_flush")
 def protect_and_audit(db: Session, flush_context, instances):
+    permanent = (
+        AuditLog,
+        Party,
+        ScreeningRun,
+        RunPartyEvidence,
+        NotificationBatch,
+        NotificationDelivery,
+        OperationAttempt,
+        RetentionAttestation,
+        RetentionHold,
+        RetentionHoldRelease,
+        RetentionPurgeCertificate,
+    )
     for obj in db.deleted:
-        if isinstance(obj, (AuditLog, Party, Disposition, Hit, ScreeningRun)):
+        if isinstance(obj, permanent):
             raise ImmutableAuditError(f"{obj.__tablename__} records cannot be deleted")
+        if isinstance(obj, (Disposition, Hit)) and (obj.__tablename__, obj.id) not in (
+            db.connection().info.get("retention_delete_capability", set())
+        ):
+            raise ImmutableAuditError(
+                f"{obj.__tablename__} deletion requires exact retention eligibility"
+            )
+    frozen_inputs = {
+        NotificationBatch: {
+            "id",
+            "created_at",
+            "kind",
+            "dedupe_key",
+            "run_id",
+            "invitation_id",
+            "window_start",
+            "window_end",
+            "payload_enc",
+        },
+        NotificationDelivery: {"id", "created_at", "batch_id", "recipient", "message_id"},
+        OperationAttempt: {
+            "id",
+            "created_at",
+            "operation",
+            "source_id",
+            "party_id",
+            "parameters",
+            "actor_user_id",
+        },
+    }
     for obj in db.dirty:
+        if isinstance(
+            obj,
+            (RetentionAttestation, RetentionHold, RetentionHoldRelease, RetentionPurgeCertificate),
+        ) and db.is_modified(obj, include_collections=True):
+            raise ImmutableAuditError("Retention evidence is insert-only")
+        for model, fields in frozen_inputs.items():
+            if isinstance(obj, model) and any(
+                inspect(obj).attrs[field].history.has_changes() for field in fields
+            ):
+                raise ImmutableAuditError("Operation/notification input evidence is immutable")
+        if isinstance(obj, RunPartyEvidence) and db.is_modified(obj, include_collections=True):
+            raise ImmutableAuditError("Run-party evidence is insert-only")
         if isinstance(obj, AuditLog) and db.is_modified(obj, include_collections=True):
             raise ImmutableAuditError("Audit log records are insert-only")
         if isinstance(obj, Disposition) and db.is_modified(obj, include_collections=True):

@@ -60,7 +60,7 @@ def current_screening_coverage(db: Session, histories=None):
             CSLEntry.source_list.in_(settings.enabled_source_lists)
         )
     required = {entry.id: entry.entry_hash for entry in db.scalars(required_query)}
-    current_settings = settings.snapshot()
+    current_settings = settings.scoring_snapshot()
     unique_runs = {run.id: run for history in histories.values() for run in history}
     legacy_versions = {
         run.csl_version_id
@@ -201,15 +201,13 @@ def dashboard_metrics(db: Session, *, now: datetime | None = None):
         else None
     )
     since = report_boundary(db)
-    # Report item count, never repeated observations of the same four-way pair.
-    cleared_pairs = {
-        (hit.party_id, hit.csl_entry_id, hit.party_hash, hit.entry_hash)
-        for _, hit in auto_clear_observations(db)
-    }
+    # Slider totals count immutable system decisions, consistently with each run
+    # and the morning report. Repeated eligible observations are separate decisions.
+    cleared_observations = auto_clear_observations(db)
     return {
         "open_items": len(queue),
         "likely_matches": sum(h.bucket == "likely" for h in queue),
-        "auto_cleared_since_report": len(cleared_pairs),
+        "auto_cleared_since_report": len(cleared_observations),
         "removed_entry_closures_since_report": len(
             {
                 (hit.party_id, hit.csl_entry_id, hit.party_hash, hit.entry_hash)

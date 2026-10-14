@@ -201,7 +201,7 @@ function GeneralForm({ settings }: { settings: WorkspaceSettings }) {
           <div className="admin-grid admin-grid-tight">
             <Field
               label="Retention period (years)"
-              help={`Off by default, so no retention period applies. When enabled, records are kept at least ${MIN_RETENTION_YEARS} years. Saving stores the policy; automatic retention processing is not active in this version.`}
+              help={`Off by default, so no retention period applies. When enabled, records are kept at least ${MIN_RETENTION_YEARS} years. Eligible evidence can be purged by scheduled processing or Apply retention now. Active parties, holds and unproven event dates remain protected.`}
               error={errors.retention_years}
             >
               {(props) => (
@@ -254,6 +254,8 @@ const WEIGHT_LABELS: Record<WeightKey, string> = {
 };
 
 type ScoringDraft = Record<ThresholdKey, string> & {
+  /** Null until edited, so the saved value (which the auto-clear panel may change) applies. */
+  auto_clear_threshold: string | null;
   weights: Record<WeightKey, string>;
   legal_suffixes: string;
   candidate_stopwords: string;
@@ -266,6 +268,7 @@ function scoringDraft(settings: WorkspaceSettings): ScoringDraft {
     candidate_min: String(settings.candidate_min),
     review_threshold: String(settings.review_threshold),
     likely_threshold: String(settings.likely_threshold),
+    auto_clear_threshold: null,
     weights: Object.fromEntries(
       WEIGHT_KEYS.map((key) => [key, String(settings.score_weights[key] ?? "")]),
     ) as Record<WeightKey, string>,
@@ -278,7 +281,10 @@ function scoringDraft(settings: WorkspaceSettings): ScoringDraft {
 
 const SOURCE_SEPARATORS = /[\n,]/;
 
-function validateScoring(draft: ScoringDraft): {
+function validateScoring(
+  draft: ScoringDraft,
+  settings: WorkspaceSettings,
+): {
   errors: Errors;
   values?: SettingsChanges;
 } {
@@ -312,6 +318,21 @@ function validateScoring(draft: ScoringDraft): {
   )
     errors.review_threshold =
       "The review threshold can’t be higher than the likely match threshold.";
+  // Saved jointly with the bounds and never clamped: a value they exclude blocks the save.
+  const auto = parseNumber(
+    draft.auto_clear_threshold ?? String(settings.auto_clear_threshold),
+  );
+  if (auto === null || !Number.isInteger(auto))
+    errors.auto_clear_threshold =
+      "Enter a whole number for the auto-clear threshold.";
+  else if (
+    review !== null &&
+    likely !== null &&
+    !errors.review_threshold &&
+    !errors.likely_threshold &&
+    (auto < review || auto > likely)
+  )
+    errors.auto_clear_threshold = `Choose an auto-clear threshold from ${review} to ${likely}, within the proposed review and likely match thresholds.`;
   const weights = {} as Record<WeightKey, number>;
   for (const key of WEIGHT_KEYS) {
     const value = read(key, draft.weights[key], WEIGHT_LABELS[key]);
@@ -332,6 +353,7 @@ function validateScoring(draft: ScoringDraft): {
       candidate_min: candidate!,
       review_threshold: review!,
       likely_threshold: likely!,
+      auto_clear_threshold: auto!,
       score_weights: weights,
       legal_suffixes: parseList(draft.legal_suffixes),
       candidate_stopwords: parseList(draft.candidate_stopwords),
@@ -359,11 +381,28 @@ function ScoringForm({ settings }: { settings: WorkspaceSettings }) {
   const noLists =
     !draft.allLists &&
     parseList(draft.sourceLists, SOURCE_SEPARATORS).length === 0;
+  const autoText =
+    draft.auto_clear_threshold ?? String(settings.auto_clear_threshold);
+  const autoValue = parseNumber(autoText);
+  const proposedReview = parseNumber(draft.review_threshold);
+  const proposedLikely = parseNumber(draft.likely_threshold);
+  const showAuto =
+    draft.auto_clear_threshold !== null ||
+    proposedReview !== settings.review_threshold ||
+    proposedLikely !== settings.likely_threshold ||
+    Boolean(errors.auto_clear_threshold);
+  const autoOutside =
+    showAuto &&
+    autoValue !== null &&
+    proposedReview !== null &&
+    proposedLikely !== null &&
+    proposedReview <= proposedLikely &&
+    (autoValue < proposedReview || autoValue > proposedLikely);
 
   function submit(event: FormEvent) {
     event.preventDefault();
     setMessage("");
-    const result = validateScoring(draft);
+    const result = validateScoring(draft, settings);
     setErrors(result.errors);
     if (!result.values) {
       setMessage("Check the highlighted fields.");
@@ -379,7 +418,9 @@ function ScoringForm({ settings }: { settings: WorkspaceSettings }) {
       onSuccess: (saved) => {
         setDraft(scoringDraft(saved));
         setMessage(
-          "Screening settings saved. The server uses them for screening and the review queue from now on; this page does not start a new screening run.",
+          saved.pending_screening_task_id
+            ? "Screening settings saved. A full screening was queued; its results will appear after it completes. Existing decisions stay in the history."
+            : "Screening settings saved. No new screening task was needed.",
         );
       },
     });
@@ -432,6 +473,37 @@ function ScoringForm({ settings }: { settings: WorkspaceSettings }) {
               </Field>
             ))}
           </div>
+          {showAuto && (
+            <div className="admin-grid admin-grid-tight">
+              <Field
+                label="Auto-clear threshold for these bounds"
+                help="Saved together with the thresholds above. The chosen value must fit the proposed review and likely match thresholds; it is never adjusted for you. Whether auto-clear is on is unchanged."
+                error={errors.auto_clear_threshold}
+              >
+                {(props) => (
+                  <input
+                    {...props}
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={autoText}
+                    onChange={(event) =>
+                      update({ auto_clear_threshold: event.target.value })
+                    }
+                  />
+                )}
+              </Field>
+            </div>
+          )}
+          {autoOutside && !errors.auto_clear_threshold && (
+            <p className="admin-warning">
+              The auto-clear threshold ({autoText}) is outside the proposed
+              bounds of {proposedReview} to {proposedLikely}. Choose a value
+              within them before saving; it won’t be adjusted automatically.
+            </p>
+          )}
           <details className="admin-details">
             <summary>Advanced scoring</summary>
             <fieldset className="admin-group">

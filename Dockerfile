@@ -20,6 +20,8 @@ WORKDIR /app/backend
 COPY --from=backend-build /app/backend /app/backend
 COPY --from=frontend-build /build/frontend/dist /app/frontend/dist
 COPY fixtures/ /app/fixtures/
+COPY LICENSE THIRD_PARTY_LICENSES.md /app/licenses/
+COPY docs/licenses/ /app/licenses/third-party/
 ENV PATH="/app/backend/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     SCREENING_TOOL_DATABASE_URL=sqlite:////data/screening.db \

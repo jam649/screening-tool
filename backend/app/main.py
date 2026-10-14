@@ -1,16 +1,32 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.staticfiles import StaticFiles
 
 from app import audit  # noqa: F401 -- registers ORM audit guards
 from app.api import audit as audit_api
-from app.api import auth, csl, dashboard, parties, review, screening, settings, sources, users
+from app.api import (
+    auth,
+    csl,
+    dashboard,
+    exports,
+    monitoring,
+    notifications,
+    parties,
+    retention,
+    review,
+    screening,
+    settings,
+    sources,
+    users,
+)
 from app.config import PRODUCT_NAME, Config
 from app.database import create_database_engine, migrate, session_factory
+from app.scheduler.runtime import start_scheduler
 from app.security import ConfiguredTrustedHostMiddleware, validate_key_binding
 
 
@@ -22,12 +38,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         migrate(engine)
         application.state.config = settings
         application.state.engine = engine
-        application.state.session_factory = session_factory(engine)
+        application.state.session_factory = session_factory(engine, settings)
+        scheduler = None
         try:
             with application.state.session_factory() as db:
                 validate_key_binding(db, settings)
+            scheduler = start_scheduler(application.state.session_factory, settings)
+            application.state.scheduler = scheduler
             yield
         finally:
+            if scheduler is not None:
+                scheduler.shutdown()
             engine.dispose()
 
     application = FastAPI(
@@ -39,8 +60,31 @@ def create_app(config: Config | None = None) -> FastAPI:
     application.include_router(csl.router, prefix="/api/v1")
     application.include_router(screening.router, prefix="/api/v1")
     application.include_router(sources.router, prefix="/api/v1")
-    for router in (review.router, parties.router, users.router, settings.router, audit_api.router):
+    application.include_router(monitoring.router, prefix="/api/v1")
+    application.include_router(notifications.router, prefix="/api/v1")
+    application.include_router(exports.router, prefix="/api/v1")
+    for router in (
+        review.router,
+        parties.router,
+        users.router,
+        settings.router,
+        audit_api.router,
+        retention.router,
+    ):
         application.include_router(router, prefix="/api/v1")
+
+    @application.exception_handler(RequestValidationError)
+    async def safe_validation_error(request: Request, exc: RequestValidationError):
+        # Validation must never echo password, token, credential or customer input.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
+                    for error in exc.errors()
+                ]
+            },
+        )
 
     @application.middleware("http")
     async def security_headers(request: Request, call_next):

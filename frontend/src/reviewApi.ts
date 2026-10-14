@@ -122,6 +122,8 @@ export type PartyEvent = {
   previously_cleared: { count: number; hits: HitDetail[] };
   zero_hits: boolean;
   party_hash: string | null;
+  party_evidence?: { party_snapshot: JsonRecord; source_snapshot: JsonRecord; candidates_considered: number; hits_recorded: number; result_counts: JsonRecord } | null;
+  purged_comparisons?: { certificate_id: string; certificate_sha256: string; hit: JsonRecord; dispositions: JsonRecord[] }[];
 };
 export type AuditEntry = {
   id: string;

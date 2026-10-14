@@ -17,7 +17,20 @@ from app.models.entities import (
     User,
     UserSession,
 )
+from app.models.evidence import RunPartyEvidence
 from app.models.invitations import UserInvitation
+from app.models.monitoring import (
+    NotificationBatch,
+    NotificationDelivery,
+    OperationAttempt,
+    OperationLease,
+)
+from app.models.retention import (
+    RetentionAttestation,
+    RetentionHold,
+    RetentionHoldRelease,
+    RetentionPurgeCertificate,
+)
 
 __all__ = [
     "AuditLog",
@@ -29,7 +42,16 @@ __all__ = [
     "Disposition",
     "Hit",
     "LoginAttempt",
+    "NotificationBatch",
+    "NotificationDelivery",
+    "OperationAttempt",
+    "OperationLease",
     "Party",
+    "RetentionAttestation",
+    "RetentionHold",
+    "RetentionHoldRelease",
+    "RetentionPurgeCertificate",
+    "RunPartyEvidence",
     "ScreeningRun",
     "ScreeningTask",
     "Setting",

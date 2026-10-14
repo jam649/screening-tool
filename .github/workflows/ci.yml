@@ -21,7 +21,7 @@ jobs:
       - working-directory: backend
         run: uv sync --frozen --extra dev
       - working-directory: backend
-        run: uv run ruff check .
+        run: uv run ruff check . ../scripts/gates
       - working-directory: backend
         run: uv run mypy app
       - working-directory: backend
@@ -57,7 +57,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Generate isolated encryption key
-        run: python3 -c 'import base64,secrets; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())' > .env
+        run: python3 -c 'import base64,secrets; from datetime import datetime,timezone; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()); print("TZ=Etc/GMT"+format(datetime.now(timezone.utc).hour-12, "+d"))' > .env
       - run: docker compose up --build -d --wait
       - working-directory: frontend
         run: npm ci && npx playwright install --with-deps chromium
@@ -79,7 +79,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Generate isolated encryption key
-        run: python3 -c 'import base64,secrets; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())' > .env
+        run: python3 -c 'import base64,secrets; from datetime import datetime,timezone; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()); print("TZ=Etc/GMT"+format(datetime.now(timezone.utc).hour-12, "+d"))' > .env
       - run: docker compose -p screening-tool-fixture-gates up --build -d --wait
       - working-directory: frontend
         run: npm ci && npx playwright install --with-deps chromium
@@ -100,3 +100,46 @@ jobs:
         run: docker compose -p screening-tool-fixture-gates logs --tail 100
       - if: always()
         run: docker compose -p screening-tool-fixture-gates down --volumes
+
+  compose-monitoring-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Generate isolated fixture encryption key
+        run: python3 -c 'import base64,secrets; from datetime import datetime,timezone; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()); print("TZ=Etc/GMT"+format(datetime.now(timezone.utc).hour-12, "+d"))' > .env
+      - run: docker compose -p screening-tool-monitoring-fixture up --build -d --wait
+      - working-directory: frontend
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Populate the untouched real CSV fixture
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8000
+          SCREENING_TOOL_GATE_CONTAINER: screening-tool-monitoring-fixture-screening-tool-1
+        run: npm test -- tests/real-csv.spec.ts --workers=1
+      - name: Verify the real monitoring, email and evidence cycle
+        run: |
+          docker cp scripts/gates/milestone5.py screening-tool-monitoring-fixture-screening-tool-1:/tmp/milestone5.py
+          docker exec screening-tool-monitoring-fixture-screening-tool-1 python /tmp/milestone5.py --run-fixture-gate
+      - name: Restart and verify persistent schedules and original evidence
+        run: |
+          docker restart screening-tool-monitoring-fixture-screening-tool-1
+          docker cp scripts/gates/milestone5_restart.py screening-tool-monitoring-fixture-screening-tool-1:/tmp/milestone5_restart.py
+          docker exec screening-tool-monitoring-fixture-screening-tool-1 python /tmp/milestone5_restart.py --run-fixture-gate
+      - name: Start anonymous loopback SMTP capture for the browser
+        run: docker exec -d screening-tool-monitoring-fixture-screening-tool-1 python -m app.notifications.fixture --port 2525 --output-dir /data/milestone5-browser-smtp
+      - name: Verify real Admin controls, deliveries, downloads and protected retention
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8000
+          SCREENING_TOOL_M5_GATE: "1"
+          SCREENING_TOOL_GATE_SMTP_PORT: "2525"
+        run: npm test -- tests/real-monitoring.spec.ts --workers=1
+      - if: failure()
+        run: docker compose -p screening-tool-monitoring-fixture logs --tail 100
+      - if: always()
+        run: docker compose -p screening-tool-monitoring-fixture down --volumes

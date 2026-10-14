@@ -10,3 +10,8 @@ The application is MIT licensed. Its dependency packages keep their original lic
 - [defusedxml](https://github.com/tiran/defusedxml): Python Software Foundation license.
 
 Frozen CSL sample data is public U.S. government data; fixture party records are synthetic. Optional Laya is separately installed by the operator and retains its publisher's Apache-2.0 terms.
+
+- [APScheduler 3.11.3](https://pypi.org/project/APScheduler/3.11.3/): MIT; stable 3.x scheduler with the application’s persistent JSON job store in SQLite.
+- [fpdf2 2.8.9](https://pypi.org/project/fpdf2/2.8.9/): LGPL-3.0-only, distributed unchanged and dynamically imported. Pinned source is available on PyPI and https://github.com/py-pdf/fpdf2/tree/2.8.9; its full license is also retained at docs/licenses/fpdf2-LICENSE.txt; installed notices are preserved and operators may replace the importable library with a compatible modified version.
+- [fontTools 4.66.1](https://pypi.org/project/fonttools/4.66.1/): MIT; [uharfbuzz 0.56.3](https://pypi.org/project/uharfbuzz/0.56.3/): Apache-2.0; Pillow: MIT-CMU. Installed dependency license notices are preserved.
+- Packaged PDF fonts: SIL Open Font License 1.1. Original Noto font copyright and licenses are under backend/app/reports/fonts/. The renamed Screening CJK derivative and reproducible source hashes are documented in docs/research/pdf-export.md.

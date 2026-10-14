@@ -62,12 +62,26 @@ test("real Docker CSV gate creates Admin, imports 2060 parties, and preserves on
   const first = await imported.json();
   expect(first).toMatchObject({ applied: true, added: 2060, changed: 0, unchanged: 0, deleted: 0, rejected_count: 0 });
   expect(first.source.record_count).toBe(2060);
-  expect(first.screening_run_ids.length).toBeGreaterThan(0);
+  expect(first.task_ids.length).toBeGreaterThan(0);
   await expect(wizard.getByText("The import was applied.")).toBeVisible();
 
   const session = await (await context.request.get("/api/v1/auth/me")).json();
   const headers = { "X-CSRF-Token": session.csrf_token, Origin: new URL(process.env.PLAYWRIGHT_BASE_URL!).origin };
-  const runRows = await Promise.all(first.screening_run_ids.map(async (id: string) => {
+  const runIds = new Set<string>(first.screening_run_ids);
+  // Scheduler recovery may claim an import task before the request's worker.
+  // Wait for its actual committed audit evidence rather than pretending it ran.
+  for (const taskId of first.task_ids as string[]) {
+    await expect.poll(async () => {
+      const response = await context.request.get(`/api/v1/audit-log?action=screening.task_completed&target_table=screening_tasks&target_id=${encodeURIComponent(taskId)}&limit=100`);
+      expect(response.ok()).toBeTruthy();
+      const evidence = await response.json();
+      const completed = evidence.items.find((item: { after?: { run_id?: string } }) => item.after?.run_id);
+      if (completed) runIds.add(completed.after.run_id);
+      return Boolean(completed);
+    }, { timeout: 90_000 }).toBe(true);
+  }
+  expect(runIds.size).toBeGreaterThan(0);
+  const runRows = await Promise.all([...runIds].map(async (id: string) => {
     const response = await context.request.get(`/api/v1/screen/runs/${id}`);
     expect(response.ok()).toBeTruthy();
     return response.json();

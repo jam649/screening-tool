@@ -17,6 +17,7 @@ from app.models import (
     Disposition,
     Hit,
     Party,
+    RunPartyEvidence,
     Source,
     Suppression,
     utcnow,
@@ -26,6 +27,7 @@ from app.reports.metrics import (
     current_screening_coverage,
     party_screenings,
 )
+from app.retention.service import purged_run_evidence
 from app.screening.engine import queue_hits, snapshot
 from app.screening.normalize import normalize_name
 
@@ -240,10 +242,17 @@ def party_file(party_id: str, user: CurrentUser, db: DB):
     for hit in hits:
         by_run.setdefault(hit.run_id, []).append(hit)
     runs = party_screenings(db).get(party.id, [])
+    purged = purged_run_evidence(db, party.id)
+    participation = {
+        row.run_id: row
+        for row in db.scalars(select(RunPartyEvidence).where(RunPartyEvidence.party_id == party.id))
+    }
     events = []
     for run in runs:
         observations = by_run.get(run.id, [])
         suppressed = [h for h in observations if h.status == "suppressed"]
+        evidence = participation.get(run.id)
+        pruned = purged.get(run.id, [])
         events.append(
             {
                 "run": run_summary_payload(run, party_id=party.id),
@@ -254,7 +263,21 @@ def party_file(party_id: str, user: CurrentUser, db: DB):
                     "count": len(suppressed),
                     "hits": [hit_payload(db, h) for h in suppressed],
                 },
-                "zero_hits": not observations,
+                "zero_hits": evidence.hits_recorded == 0
+                if evidence
+                else not observations and not pruned,
+                "purged_comparisons": pruned,
+                "party_evidence": {
+                    "id": evidence.id,
+                    "party_hash": evidence.party_hash,
+                    "party_snapshot": evidence.party_snapshot,
+                    "source_snapshot": evidence.source_snapshot,
+                    "candidates_considered": evidence.candidates_considered,
+                    "hits_recorded": evidence.hits_recorded,
+                    "result_counts": evidence.result_counts,
+                }
+                if evidence
+                else None,
                 "party_hash": (run.settings_snapshot.get("scope") or {})
                 .get("party_hashes", {})
                 .get(party.id),
@@ -272,6 +295,13 @@ def party_file(party_id: str, user: CurrentUser, db: DB):
         db.scalars(select(Disposition.id).where(Disposition.hit_id.in_([h.id for h in hits])))
     )
     ids.update(db.scalars(select(Suppression.id).where(Suppression.party_id == party.id)))
+    for rows in purged.values():
+        for row in rows:
+            ids.add(row["certificate_id"])
+            ids.add(row["hit"]["id"])
+            ids.add(row["hit"]["csl_entry_id"])
+            ids.update(decision["id"] for decision in row["dispositions"])
+    ids.update(row.id for row in participation.values())
     ids.update(
         db.scalars(
             select(CSLFetch.id).where(CSLFetch.version_id.in_([run.csl_version_id for run in runs]))

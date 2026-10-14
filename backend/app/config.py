@@ -1,5 +1,7 @@
+import os
 from pathlib import Path
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cryptography.fernet import Fernet
 from pydantic import Field, SecretStr, field_validator
@@ -27,11 +29,22 @@ class Config(BaseSettings):
     secret_key: SecretStr
     database_url: str = "sqlite:///./data/screening.db"
     frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    scheduler_enabled: bool = True
+    default_timezone: str = Field(default_factory=lambda: os.environ.get("TZ", "UTC"))
     session_hours: int = Field(default=12, ge=1)
     login_attempt_limit: int = Field(default=5, ge=1)
     login_window_seconds: int = Field(default=900, ge=1)
     allowed_hosts: list[str] = ["localhost", "127.0.0.1", "::1"]
     allowed_origins: list[str] = []
+
+    @field_validator("default_timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ValueError, ZoneInfoNotFoundError):
+            raise ValueError("Configure an IANA server timezone") from None
+        return value
 
     @field_validator("allowed_hosts")
     @classmethod

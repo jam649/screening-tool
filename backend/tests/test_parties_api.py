@@ -106,7 +106,7 @@ def test_auto_clear_counts_and_filters_use_last_successful_report(client, admin,
         for hit in observations:
             hit.status = "dispositioned"
         db.commit()
-    assert client.get("/api/v1/dashboard").json()["auto_cleared_since_report"] == 1
+    assert client.get("/api/v1/dashboard").json()["auto_cleared_since_report"] == 2
     assert client.get("/api/v1/parties", params={"auto_cleared": True}).json()["total"] == 1
     with client.app.state.session_factory() as db:
         db.add(Setting(key="last_report_at", value=utcnow().isoformat()))
