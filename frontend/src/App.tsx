@@ -9,6 +9,7 @@ import { CSLPanel } from "./CSLPanel";
 import { Sources } from "./Sources";
 import { QboSettings } from "./QboSettings";
 import { BcSettings } from "./BcSettings";
+import { ModelSettings } from "./ModelSettings";
 import { NotificationSettings, NotificationsBanner } from "./NotificationSettings";
 import { MonitoringPanel, MonitoringSummary } from "./MonitoringPanel";
 import { AutoClearControls } from "./AutoClearControls";
@@ -306,6 +307,7 @@ function Settings({
       <NotificationSettings session={session} />
       <QboSettings session={session} />
       <BcSettings session={session} />
+      <ModelSettings session={session} />
       <RetentionControls session={session} />
       <UsersPanel session={session} />
       <CSLPanel />

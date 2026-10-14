@@ -225,3 +225,44 @@ jobs:
         run: |
           docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-api down --volumes
           docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-browser down --volumes
+
+  compose-model-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Generate isolated fixture encryption key
+        run: python3 -c 'import base64,secrets; from datetime import datetime,timezone; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()); print("TZ=Etc/GMT"+format(datetime.now(timezone.utc).hour-12, "+d"))' > .env
+      - name: Start a fresh packaged synthetic-provider API
+        run: docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api up --build -d --wait
+      - name: Verify model privacy, probability-zero rail, fallback and actual training CLI
+        run: docker exec screening-tool-model-api-screening-tool-1 python /tmp/gates/milestone8.py --run-fixture-gate
+      - name: Restart with retained encrypted model settings and original human evidence
+        run: |
+          docker restart screening-tool-model-api-screening-tool-1
+          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api up -d --wait
+          docker exec screening-tool-model-api-screening-tool-1 python /tmp/gates/milestone8.py --verify-restart
+      - name: Preserve API volume and start a separate fresh model browser fixture
+        run: |
+          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api stop
+          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-browser up --build -d --wait
+      - working-directory: frontend
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Work native model settings, human history, key clearing and full ZIP privacy
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8000
+          SCREENING_TOOL_M8_GATE: "1"
+        run: npm test -- tests/real-model.spec.ts --workers=1
+      - if: failure()
+        run: |
+          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api logs --tail 100
+          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-browser logs --tail 100
+      - if: always()
+        run: |
+          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api down --volumes
+          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-browser down --volumes

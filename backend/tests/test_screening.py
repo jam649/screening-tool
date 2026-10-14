@@ -336,7 +336,9 @@ def test_model_hook_immutable_preinsert_rail_and_atomic_failure(seeded):
         ),
     )
     hit = db.scalar(select(Hit).where(Hit.run_id == run.id))
-    assert hit.model_prob == 0.01 and hit.final_confidence == 10 and hit.bucket == "likely"
+    # The default authoritative blend is deterministic-only; adapter-supplied
+    # confidence is validated but cannot override the engine's policy.
+    assert hit.model_prob == 0.01 and hit.final_confidence == 100 and hit.bucket == "likely"
     before = db.scalar(select(func.count()).select_from(ScreeningRun))
     with pytest.raises(ScreeningValidationError):
         run_screening(db, adjudicate=lambda *args: Adjudication(final_confidence=101))

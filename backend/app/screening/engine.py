@@ -10,12 +10,15 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
+from math import isfinite
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.adjudicators.contracts import ModelConfig
 from app.audit import audit, redact_credentials
 from app.csl.parser import HASH_RULE_VERSION, canonical_hash, csl_entry_hash
 from app.csl.service import current_version
@@ -29,6 +32,8 @@ from app.models import (
     ScreeningTask,
     Source,
     Suppression,
+    User,
+    UserSession,
     utcnow,
 )
 from app.models.evidence import RunPartyEvidence
@@ -63,9 +68,110 @@ class Adjudication:
     final_confidence: float | None = None
     model_name: str | None = None
     fallback: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 AdjudicationHook = Callable[[dict, dict, float, dict, ScreeningSettings], Adjudication]
+
+
+@dataclass(frozen=True)
+class PreparedPair:
+    entry: dict[str, Any]
+    score: float
+    explanation: dict[str, Any]
+    eligible: bool
+
+
+@dataclass(frozen=True)
+class PreparedScreening:
+    settings: ScreeningSettings
+    model: ModelConfig
+    expected_model: ModelConfig
+    version_id: str
+    started_at: datetime
+    parties: list[dict[str, Any]]
+    entries: list[dict[str, Any]]
+    sources: dict[str, dict[str, Any]]
+    pairs: dict[str, list[PreparedPair]]
+    candidate_counts: dict[str, int]
+    run_snapshot: dict[str, Any]
+
+
+def _model_policy(db: Session) -> ModelConfig:
+    from app.adjudicators.settings import load_model_config
+
+    config = db.info.get("config")
+    return load_model_config(db, config) if config is not None else ModelConfig()
+
+
+def _validate_prepared(db: Session, prepared: PreparedScreening) -> None:
+    # Inference hooks can expose a previously loaded anchor; never let the
+    # identity map retain its pre-inference status across the final writer.
+    if db.new or db.dirty or db.deleted:
+        raise ScreeningValidationError("Commit pending changes before starting screening")
+    db.expire_all()
+    execution = db.info.get("operation_execution")
+    if execution is not None:
+        execution.check_fence(db)
+    actor_id = db.info.get("actor_user_id")
+    actor = db.get(User, actor_id, populate_existing=True) if actor_id else None
+    if actor_id and (actor is None or not actor.active or actor.role != "admin"):
+        from app.scheduler.leases import OperationAuthorityError
+
+        raise OperationAuthorityError("Active Admin role required")
+    session_id = db.info.get("auth_session_id")
+    if session_id:
+        authenticated = db.get(UserSession, session_id, populate_existing=True)
+        if (
+            authenticated is None
+            or authenticated.user_id != actor_id
+            or authenticated.expires_at <= utcnow()
+        ):
+            from app.scheduler.leases import OperationAuthorityError
+
+            raise OperationAuthorityError("Active Admin session required")
+    if load_settings(db) != prepared.settings or _model_policy(db) != prepared.expected_model:
+        raise ScreeningValidationError("Screening policy changed; retry screening")
+
+
+def _validate_adjudication(result: Adjudication) -> None:
+    for value, maximum in ((result.model_prob, 1), (result.final_confidence, 100)):
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+            or not 0 <= value <= maximum
+        ):
+            raise ScreeningValidationError("Adjudication returned invalid confidence")
+
+
+def _infer(
+    db: Session, prepared: PreparedScreening, adjudicate: AdjudicationHook | None
+) -> dict[tuple[str, str], Adjudication]:
+    # No ORM object or transaction is retained across an outbound model call.
+    db.rollback()
+    results = {}
+    if adjudicate is not None:
+        for party in prepared.parties:
+            for pair in prepared.pairs[party["id"]]:
+                if pair.eligible:
+                    # A previous call may outlive a policy/authority revocation.
+                    # Observe it before releasing any further identity evidence,
+                    # while retaining the final atomic writer validation too.
+                    try:
+                        _validate_prepared(db, prepared)
+                    finally:
+                        db.rollback()
+                    result = adjudicate(
+                        deepcopy(party),
+                        deepcopy(pair.entry),
+                        pair.score,
+                        deepcopy(pair.explanation),
+                        prepared.settings,
+                    )
+                    _validate_adjudication(result)
+                    results[party["id"], pair.entry["id"]] = deepcopy(result)
+    return results
 
 
 def snapshot(record: Any) -> dict[str, Any]:
@@ -139,7 +245,9 @@ def queue_hits(
         if scope is not None:
             party_ids = None if scope["party_ids"] is None else set(scope["party_ids"])
             entry_ids = None if scope["entry_ids"] is None else set(scope["entry_ids"])
-            scopes.append((run.id, party_ids, entry_ids))
+            scopes.append(
+                (run.id, party_ids, entry_ids, scope.get("party_hashes"), scope.get("entry_hashes"))
+            )
     active = []
     for (party_id, entry_id), observation in latest.items():
         # A later completed scope with no stored hit proves the current pair fell
@@ -147,9 +255,11 @@ def queue_hits(
         covering_run = next(
             (
                 run_id
-                for run_id, party_ids, entry_ids in scopes
+                for run_id, party_ids, entry_ids, party_hashes, entry_hashes in scopes
                 if (party_ids is None or party_id in party_ids)
                 and (entry_ids is None or entry_id in entry_ids)
+                and (party_hashes is None or party_hashes.get(party_id) == observation.party_hash)
+                and (entry_hashes is None or entry_hashes.get(entry_id) == observation.entry_hash)
             ),
             None,
         )
@@ -174,20 +284,82 @@ def queue_hit_is_current(db: Session, hit: Hit) -> bool:
     )
 
 
-def _execute(
+def current_scoring_context(db: Session) -> str:
+    return canonical_hash(
+        {**load_settings(db).scoring_snapshot(), "model": _model_policy(db).scoring_snapshot()}
+    )
+
+
+def _bypassed_pairs(db: Session, parties: set[str]) -> set[tuple[str, str, str, str]]:
+    hits = {hit.id: hit for hit in db.scalars(select(Hit).where(Hit.party_id.in_(parties)))}
+    humans: dict[tuple[str, str], Disposition] = {}
+    positives: dict[tuple[str, str], Disposition] = {}
+    false_positives: dict[tuple[str, str, str, str], Disposition] = {}
+    for decision in db.scalars(
+        select(Disposition)
+        .join(Hit)
+        .where(Hit.party_id.in_(parties), Disposition.actor_user_id.is_not(None))
+        .order_by(Disposition.created_at.desc(), Disposition.id.desc())
+    ):
+        hit = hits[decision.hit_id]
+        pair = hit.party_id, hit.csl_entry_id
+        humans.setdefault(pair, decision)
+        if decision.kind in {"confirmed_match", "escalated"}:
+            positives.setdefault(pair, decision)
+        elif decision.kind == "false_positive":
+            false_positives.setdefault((*pair, hit.party_hash, hit.entry_hash), decision)
+    bypassed = set()
+    for pair, decision in humans.items():
+        if decision.kind in {"confirmed_match", "escalated"}:
+            hit = hits[decision.hit_id]
+            bypassed.add((*pair, hit.party_hash, hit.entry_hash))
+    for suppression in db.scalars(select(Suppression).where(Suppression.party_id.in_(parties))):
+        pair = suppression.party_id, suppression.csl_entry_id
+        key = *pair, suppression.party_hash, suppression.entry_hash
+        fp = false_positives.get(key) or db.get(Disposition, suppression.disposition_id)
+        positive = positives.get(pair)
+        if (
+            positive is None
+            or fp is None
+            or (positive.created_at, positive.id) <= (fp.created_at, fp.id)
+        ):
+            bypassed.add(key)
+    return bypassed
+
+
+def _prepare(
     db: Session,
     *,
-    trigger: str,
     party_ids: list[str] | None,
     entry_ids: list[str] | None,
     csl_version_id: str | None,
-    adjudicate: AdjudicationHook | None = None,
-) -> ScreeningRun:
+    adjudicate: AdjudicationHook | None,
+    model_config: ModelConfig | None,
+) -> tuple[PreparedScreening, AdjudicationHook | None]:
+    if db.new or db.dirty or db.deleted:
+        raise ScreeningValidationError("Commit pending changes before starting screening")
+    db.rollback()
+    # sqlite3's legacy mode does not start a transaction for SELECT. An explicit
+    # read transaction pins party, list-version and policy snapshots together;
+    # WAL still permits connector writes, and rollback releases it before HTTP.
+    db.execute(text("BEGIN"))
+    started_at = utcnow()
+    if adjudicate is None and model_config is None:
+        from app.adjudicators.runner import build_adjudication_hook
+
+        model, adjudicate = build_adjudication_hook(db)
+        expected_model = model
+    else:
+        expected_model = _model_policy(db)
+        # Explicit hook/policy injection is internal and used only by tests.
+        model = model_config or expected_model
     version = current_version(db)
     if version is None:
         raise ScreeningValidationError("Fetch the CSL before screening parties")
     settings = load_settings(db)
-    context_hash = canonical_hash(settings.scoring_snapshot())
+    context_hash = canonical_hash(
+        {**settings.scoring_snapshot(), "model": model.scoring_snapshot()}
+    )
     decision_context = canonical_hash(
         {"scoring_context": context_hash, "auto_clear_policy": settings.auto_clear_snapshot()}
     )
@@ -223,9 +395,9 @@ def _execute(
         # Later no-op semantic versions must not discard still-relevant deltas;
         # only a changed/removed entry hash makes an older task stale.
         entries = [entry for entry in entries if revisions.get(entry.id) == entry.entry_hash]
-    index = CandidateIndex(entries, settings)
     run_snapshot = {
         **settings.snapshot(),
+        "model": model.scoring_snapshot(),
         "scoring_context": context_hash,
         "decision_context": decision_context,
         "hash_rule_version": HASH_RULE_VERSION,
@@ -236,9 +408,102 @@ def _execute(
             "entry_hashes": {entry.id: entry.entry_hash for entry in entries},
         },
     }
+    party_set = {party.id for party in parties}
+    bypassed = _bypassed_pairs(db, party_set)
+    entries_by_id = {entry.id: entry for entry in entries}
+    hashes = {party.id: party.record_hash for party in parties}
+    forced: dict[str, set[str]] = {}
+    for hit in db.scalars(
+        select(Hit).where(Hit.party_id.in_(party_set), Hit.status == "open", Hit.bucket != "low")
+    ):
+        entry = entries_by_id.get(hit.csl_entry_id)
+        if (
+            entry is not None
+            and hit.party_hash == hashes[hit.party_id]
+            and hit.entry_hash == entry.entry_hash
+        ):
+            forced.setdefault(hit.party_id, set()).add(entry.id)
+    source_snapshots = {
+        source.id: {"id": source.id, "kind": source.kind, "label": source.label}
+        for source in db.scalars(
+            select(Source).where(Source.id.in_({p.source_id for p in parties}))
+        )
+    }
+    index = CandidateIndex(entries, settings)
+    pairs: dict[str, list[PreparedPair]] = {}
+    candidate_counts = {}
+    for party in parties:
+        candidates, fallback = index.candidates(party)
+        candidate_ids = {entry.id for entry in candidates}
+        candidates.extend(
+            entries_by_id[id] for id in sorted(forced.get(party.id, set()) - candidate_ids)
+        )
+        candidate_counts[party.id] = len(candidates)
+        pairs[party.id] = []
+        for entry in candidates:
+            scored = score_pair(party, entry, settings)
+            if scored.score < settings.candidate_min:
+                continue
+            explanation = deepcopy(scored.explanation)
+            explanation.update(
+                {
+                    "blocking_fallback": fallback,
+                    "queue_context": context_hash,
+                    "decision_context": decision_context,
+                    "auto_clear_policy": settings.auto_clear_snapshot(),
+                }
+            )
+            if entry.id in forced.get(party.id, set()):
+                explanation["prior_pair_forced_candidate"] = True
+            eligible = (
+                party.id,
+                entry.id,
+                party.record_hash,
+                entry.entry_hash,
+            ) not in bypassed and scored.score >= settings.review_threshold - 10
+            pairs[party.id].append(
+                PreparedPair(snapshot(entry), scored.score, explanation, eligible)
+            )
+    prepared = PreparedScreening(
+        settings,
+        model,
+        expected_model,
+        csl_version_id or version.id,
+        started_at,
+        [snapshot(p) for p in parties],
+        [snapshot(e) for e in entries],
+        source_snapshots,
+        pairs,
+        candidate_counts,
+        run_snapshot,
+    )
+    db.rollback()
+    return prepared, adjudicate
+
+
+def _execute(
+    db: Session,
+    *,
+    trigger: str,
+    party_ids: list[str] | None,
+    entry_ids: list[str] | None,
+    csl_version_id: str | None,
+    adjudicate: AdjudicationHook | None = None,
+    prepared: PreparedScreening | None = None,
+    results: dict[tuple[str, str], Adjudication] | None = None,
+) -> ScreeningRun:
+    assert prepared is not None
+    settings = prepared.settings
+    context_hash = prepared.run_snapshot["scoring_context"]
+    decision_context = prepared.run_snapshot["decision_context"]
+    parties = [SimpleNamespace(**values) for values in prepared.parties]
+    entries = [SimpleNamespace(**values) for values in prepared.entries]
+    run_snapshot = deepcopy(prepared.run_snapshot)
+    call_summary = {"calls": len(results or {}), "superseded": 0, "fallbacks": 0}
     run = ScreeningRun(
         trigger=trigger,
-        csl_version_id=csl_version_id or version.id,
+        csl_version_id=prepared.version_id,
+        started_at=prepared.started_at,
         settings_snapshot=run_snapshot,
     )
     db.add(run)
@@ -291,12 +556,6 @@ def _execute(
                 false_positive_decisions.setdefault(exact_pair, disposition)
     scoped_entries = {entry.id: entry for entry in entries}
     party_hashes = {party.id: party.record_hash for party in parties}
-    sources = {
-        source.id: source
-        for source in db.scalars(
-            select(Source).where(Source.id.in_({party.source_id for party in parties}))
-        )
-    }
     forced: dict[str, set[str]] = {}
     for hit in existing_hits:
         current_entry = scoped_entries.get(hit.csl_entry_id)
@@ -309,7 +568,7 @@ def _execute(
         ):
             forced.setdefault(hit.party_id, set()).add(hit.csl_entry_id)
     for party in parties:
-        original_party = snapshot(party)
+        original_party = deepcopy(vars(party))
         counts = {
             key: 0
             for key in (
@@ -322,26 +581,12 @@ def _execute(
                 "new_queue",
             )
         }
-        candidates, fallback = index.candidates(party)
-        candidate_ids = {entry.id for entry in candidates}
-        candidates.extend(
-            scoped_entries[id] for id in sorted(forced.get(party.id, set()) - candidate_ids)
-        )
         run.parties_screened += 1
-        for entry in candidates:
-            scored = score_pair(party, entry, settings)
-            if scored.score < settings.candidate_min:
-                continue
-            party_snapshot, entry_snapshot = deepcopy(original_party), snapshot(entry)
-            explanation = scored.explanation
-            explanation.update(
-                {
-                    "blocking_fallback": fallback,
-                    "queue_context": context_hash,
-                    "decision_context": decision_context,
-                    "auto_clear_policy": settings.auto_clear_snapshot(),
-                }
-            )
+        for comparison in prepared.pairs[party.id]:
+            entry = SimpleNamespace(**comparison.entry)
+            scored = SimpleNamespace(score=comparison.score)
+            party_snapshot, entry_snapshot = deepcopy(original_party), deepcopy(comparison.entry)
+            explanation = deepcopy(comparison.explanation)
             exact_key = party.id, entry.id, party.record_hash, entry.entry_hash
             suppression = exact_suppressions.get(exact_key)
             prior = prior_suppressions.get((party.id, entry.id))
@@ -410,27 +655,22 @@ def _execute(
                         "current": HASH_RULE_VERSION,
                         "reason": "Type-aware hash policy invalidated the prior remembered pairing",
                     }
-            result = Adjudication()
-            if (
-                adjudicate
-                and not suppression
-                and not completed_decision
-                and scored.score >= settings.review_threshold - 10
-            ):
-                result = adjudicate(
-                    deepcopy(party_snapshot),
-                    deepcopy(entry_snapshot),
-                    scored.score,
-                    deepcopy(explanation),
-                    settings,
-                )
+            observed = (results or {}).get((party.id, entry.id), Adjudication())
+            result = Adjudication() if suppression or completed_decision else observed
+            _validate_adjudication(result)
             confidence = (
-                scored.score if result.final_confidence is None else result.final_confidence
+                scored.score
+                if result.model_prob is None
+                else round(
+                    prepared.model.w_det * scored.score
+                    + prepared.model.w_model * 100 * result.model_prob
+                )
             )
-            if not 0 <= confidence <= 100 or (
-                result.model_prob is not None and not 0 <= result.model_prob <= 1
-            ):
-                raise ScreeningValidationError("Adjudication returned invalid confidence")
+            if observed.metadata is not None:
+                explanation["adjudication"] = deepcopy(observed.metadata)
+            if (party.id, entry.id) in (results or {}) and (suppression or completed_decision):
+                explanation["adjudication_superseded_by_human"] = True
+                call_summary["superseded"] += 1
             hit_bucket = bucket(confidence, settings, scored.score)
             auto_clear = (
                 not suppression
@@ -523,21 +763,30 @@ def _execute(
                 counts["new_queue"] += 1
             if completed_decision is not None:
                 counts["completed_human"] += 1
-            if result.model_name:
-                run.model_name = result.model_name
-            if result.fallback:
-                run.model_fallbacks = [*run.model_fallbacks, redact_credentials(result.fallback)]
-        source = sources[party.source_id]
+            if observed.model_name:
+                run.model_name = observed.model_name
+            if observed.fallback:
+                fallback_proof = {
+                    **redact_credentials(observed.fallback),
+                    "party_id": party.id,
+                    "csl_entry_id": entry.id,
+                }
+                run.model_fallbacks = [*run.model_fallbacks, fallback_proof]
+                call_summary["fallbacks"] += 1
+                audit(
+                    db, "screening.model_fallback", "screening_runs", run.id, after=fallback_proof
+                )
+        source_snapshot = prepared.sources[party.source_id]
         db.add(
             RunPartyEvidence(
                 run_id=run.id,
                 party_id=party.id,
                 party_hash=party.record_hash,
                 party_snapshot=original_party,
-                source_snapshot={"id": source.id, "kind": source.kind, "label": source.label},
+                source_snapshot=deepcopy(source_snapshot),
                 scoring_context=context_hash,
                 decision_context=decision_context,
-                candidates_considered=len(candidates),
+                candidates_considered=prepared.candidate_counts[party.id],
                 hits_recorded=sum(counts[key] for key in ("low", "review", "likely")),
                 result_counts=counts,
             )
@@ -548,6 +797,7 @@ def _execute(
     db.flush()
     from app.notifications.service import enqueue_likely_alert
 
+    run.settings_snapshot = {**run_snapshot, "adjudication_summary": call_summary}
     enqueue_likely_alert(db, run)
     run.finished_at = utcnow()
     db.flush()
@@ -563,16 +813,30 @@ def run_screening(
     entry_ids: list[str] | None = None,
     csl_version_id: str | None = None,
     adjudicate: AdjudicationHook | None = None,
+    model_config: ModelConfig | None = None,
 ) -> ScreeningRun:
-    _begin(db)
+    if db.new or db.dirty or db.deleted:
+        raise ScreeningValidationError("Commit pending changes before starting screening")
     try:
+        prepared, hook = _prepare(
+            db,
+            party_ids=party_ids,
+            entry_ids=entry_ids,
+            csl_version_id=csl_version_id,
+            adjudicate=adjudicate,
+            model_config=model_config,
+        )
+        results = _infer(db, prepared, hook)
+        _begin(db)
+        _validate_prepared(db, prepared)
         run = _execute(
             db,
             trigger=trigger,
             party_ids=party_ids,
             entry_ids=entry_ids,
             csl_version_id=csl_version_id,
-            adjudicate=adjudicate,
+            prepared=prepared,
+            results=results,
         )
         db.commit()
         return run
@@ -581,13 +845,20 @@ def run_screening(
         raise
 
 
-def process_pending_tasks(db: Session) -> list[ScreeningRun]:
-    """Consume tasks one at a time under SQLite's write lock.
+def process_pending_tasks(
+    db: Session,
+    *,
+    adjudicate: AdjudicationHook | None = None,
+    model_config: ModelConfig | None = None,
+) -> list[ScreeningRun]:
+    """Infer without a writer; commit each complete task and its evidence atomically.
 
-    Task state, immutable comparisons, and completion commit together: a crashed
-    transaction leaves the task pending and no partially committed comparisons.
-    Failed tasks retain a sanitized error and are retried on the next invocation.
+    A crash before application leaves the durable task untouched. Each independent
+    task can complete even when another fails. No partially committed comparison
+    is exposed, and sanitized diagnostics never include provider exception text.
     """
+    if db.new or db.dirty or db.deleted:
+        raise ScreeningValidationError("Commit pending changes before starting screening")
     tasks = list(
         db.execute(
             select(ScreeningTask.id, ScreeningTask.attempts)
@@ -595,31 +866,17 @@ def process_pending_tasks(db: Session) -> list[ScreeningRun]:
             .order_by(ScreeningTask.created_at, ScreeningTask.id)
         )
     )
+    db.rollback()
     runs = []
     failures: list[dict[str, Any]] = []
     for task_id, previous_attempts in tasks:
         try:
-            _begin(db)
-        except ScreeningBusyError:
-            # Keep pending/running state intact. Earlier independent commits must
-            # remain visible in the aggregate even when another writer takes over.
-            failures.append(
-                {
-                    "task_id": task_id,
-                    "attempts": previous_attempts,
-                    "error": "Screening remains pending while the database is busy",
-                }
-            )
-            break
-        task = db.get(ScreeningTask, task_id, populate_existing=True)
-        if task is None or task.status == "complete":
-            db.rollback()
-            continue
-        try:
-            task.status = "running"
-            task.attempts += 1
-            task.started_at = utcnow()
-            task.last_error = None
+            task = db.get(ScreeningTask, task_id, populate_existing=True)
+            if task is None or task.status == "complete":
+                db.rollback()
+                continue
+            trigger, task_version = task.trigger, task.csl_version_id
+            entry_ids = deepcopy(task.entry_ids) if trigger == "list_change" else None
             active_party_ids = None
             if task.party_ids:
                 active_party_ids = list(
@@ -629,12 +886,33 @@ def process_pending_tasks(db: Session) -> list[ScreeningRun]:
                         )
                     )
                 )
+            prepared, hook = _prepare(
+                db,
+                party_ids=active_party_ids,
+                entry_ids=entry_ids,
+                csl_version_id=task_version if trigger == "list_change" else None,
+                adjudicate=adjudicate,
+                model_config=model_config,
+            )
+            results = _infer(db, prepared, hook)
+            _begin(db)
+            _validate_prepared(db, prepared)
+            task = db.get(ScreeningTask, task_id, populate_existing=True)
+            if task is None or task.status == "complete":
+                db.rollback()
+                continue
+            task.status = "running"
+            task.attempts += 1
+            task.started_at = prepared.started_at
+            task.last_error = None
             run = _execute(
                 db,
-                trigger=task.trigger,
+                trigger=trigger,
                 party_ids=active_party_ids,
-                entry_ids=task.entry_ids if task.trigger == "list_change" else None,
-                csl_version_id=task.csl_version_id if task.trigger == "list_change" else None,
+                entry_ids=entry_ids,
+                csl_version_id=task_version if trigger == "list_change" else None,
+                prepared=prepared,
+                results=results,
             )
             task.status = "complete"
             task.finished_at = utcnow()
@@ -647,10 +925,28 @@ def process_pending_tasks(db: Session) -> list[ScreeningRun]:
             )
             db.commit()
             runs.append(run)
-        except Exception:
+        except ScreeningBusyError:
             db.rollback()
-            task = db.get(ScreeningTask, task_id)
-            assert task is not None
+            failures.append(
+                {
+                    "task_id": task_id,
+                    "attempts": previous_attempts,
+                    "error": "Screening remains pending while the database is busy",
+                }
+            )
+            break
+        except Exception as exc:
+            db.rollback()
+            # Fence/authority failures must not write task state under revoked ownership.
+            from app.scheduler.leases import OperationAuthorityError, OperationLeaseLostError
+
+            if isinstance(exc, (OperationAuthorityError, OperationLeaseLostError)):
+                raise
+            _begin(db)
+            task = db.get(ScreeningTask, task_id, populate_existing=True)
+            if task is None or task.status == "complete":
+                db.rollback()
+                continue
             task.status = "failed"
             task.attempts += 1
             task.last_error = "Screening failed; no comparison from this task was committed"
@@ -665,6 +961,12 @@ def process_pending_tasks(db: Session) -> list[ScreeningRun]:
             failures.append(
                 {"task_id": task.id, "attempts": task.attempts, "error": task.last_error}
             )
+    # A later task's preparation rollback expires earlier ORM rows. Return
+    # complete immutable records that remain readable after the operation's
+    # Session closes, including partial-success diagnostics.
+    for completed_run in runs:
+        db.refresh(completed_run)
+        db.expunge(completed_run)
     if failures:
         raise ScreeningTasksFailedError(runs, failures)
     return runs

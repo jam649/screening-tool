@@ -60,7 +60,9 @@ def current_screening_coverage(db: Session, histories=None):
             CSLEntry.source_list.in_(settings.enabled_source_lists)
         )
     required = {entry.id: entry.entry_hash for entry in db.scalars(required_query)}
-    current_settings = settings.scoring_snapshot()
+    from app.screening.engine import current_scoring_context
+
+    current_context = current_scoring_context(db)
     unique_runs = {run.id: run for history in histories.values() for run in history}
     legacy_versions = {
         run.csl_version_id
@@ -81,8 +83,9 @@ def current_screening_coverage(db: Session, histories=None):
     for run in unique_runs.values():
         scope = run.settings_snapshot.get("scope") or {}
         entry_ids = scope.get("entry_ids")
-        if not isinstance(entry_ids, list) or any(
-            run.settings_snapshot.get(key) != value for key, value in current_settings.items()
+        if (
+            not isinstance(entry_ids, list)
+            or run.settings_snapshot.get("scoring_context") != current_context
         ):
             covered_by_run[run.id] = frozenset()
             continue

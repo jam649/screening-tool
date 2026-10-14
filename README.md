@@ -2,7 +2,7 @@
 
 Self-hosted customer and vendor screening against the U.S. Consolidated Screening List (CSL). Python/FastAPI/SQLite and React, in one container. MIT licensed.
 
-**Implementation is underway.** The secure setup wizard, CSL pipeline, CSV/XLSX import, deterministic matching, keyboard review, party history, users, persistent monitoring, SMTP reports, PDF/CSV/ZIP exports and bounded retention have passed the real Docker and browser gates through milestone 5. QuickBooks OAuth, full/CDC sync, signed webhooks and revocation have passed the packaged fixture, browser and restart gates in milestone 6. Business Central company discovery, full/incremental sync, validated subscriptions and cleanup have passed the fresh packaged API, browser and retained-volume restart gates in milestone 7; publication CI is pending. Optional models and release hardening are being completed in order, as tracked in [the implementation plan](docs/plans/implementation.md). Live QuickBooks and Business Central sandbox validation is deferred by the project owner; fixture checks do not establish production integration readiness.
+**Implementation is underway.** The secure setup wizard, CSL pipeline, CSV/XLSX import, deterministic matching, keyboard review, party history, users, persistent monitoring, SMTP reports, PDF/CSV/ZIP exports and bounded retention have passed the real Docker and browser gates through milestone 5. QuickBooks OAuth, full/CDC sync, signed webhooks and revocation have passed the packaged fixture, browser and restart gates in milestone 6. Business Central company discovery, full/incremental sync, validated subscriptions and cleanup have passed the fresh packaged API, browser and retained-volume restart gates in milestone 7, with all seven CI jobs passing. Optional model settings, human training-pair export and the real local Laya application gate have passed milestone 8’s local API, browser and restart checks; signed publication and CI are being checked. Release hardening remains in [the implementation plan](docs/plans/implementation.md). Live QuickBooks and Business Central sandbox validation is deferred by the project owner; fixture checks do not establish production integration readiness.
 
 ## Start locally
 
@@ -58,6 +58,23 @@ Live tenant validation remains deferred. The connector uses Microsoft's document
 Disconnect stops polling immediately and preserves records and review evidence. It removes the app's remote webhook subscriptions and reports failures with an encrypted retry obligation. Entra app consent remains under your tenant administrator's control. Configure your reverse proxy to omit webhook validation query strings; application HTTP access logging is disabled.
 
 The [milestone 7 record](docs/milestones/7.md) tracks synthetic contracts, application gates and deferred live checks separately.
+
+## Optional models and training pairs
+
+Deterministic screening works without an API key. In **Settings → Model settings**, select None, local Laya or hosted Jev. Defaults are `w_det=1`, `w_model=0`: the measured base Laya checkpoint did not discriminate these screening identities reliably. An enabled model can record its probability while scores remain deterministic. Use a positive model weight only after checking representative held-out human decisions. A strong deterministic match always stays in the likely bucket; unavailable or invalid inference keeps the deterministic score and records a fallback.
+
+For Laya, run its server separately on this machine with the verified multilingual checkpoint and 1024-token limit; see [the pinned runtime and quality report](docs/research/laya-validation.md) and [serving contracts](docs/research/model-adapters.md#local-laya). In the Compose app, use `http://host.docker.internal:8009` for a host server on port 8009; a noncontainer development backend can use `http://127.0.0.1:8009`. The endpoint accepts only this host's loopback or explicit Docker host bridge. The application includes the exact offline tokenizer, not model weights or a Laya server. Keep the local server private; an optional Laya key is write-only. Save the configuration before using **Test saved configuration**, which sends synthetic identity fields and reports actual model/usage or a fixed failure code. Changing a draft does not test or save it.
+
+For Jev, obtain your own TypeSafe account/key; entitlement and billing are not verified by this project. Before saving the key, acknowledge the displayed sentence: “Enabling Jev sends your customer and vendor names and addresses to TypeSafe AI for scoring. Laya keeps all data on this server.” The adapter uses the fixed `jev-1.13.0` contract. Keys remain encrypted and display only configured flags; explicit clear controls remove them. Provider and weight changes queue a full screening and retain original settings on previous runs.
+
+Export retained human labels for a separate fine-tuning workflow:
+
+```bash
+docker compose exec screening-tool screening-tool export training-pairs --output /data/training-pairs.csv
+docker compose cp screening-tool:/data/training-pairs.csv ./training-pairs.csv
+```
+
+This file contains commercially sensitive identity evidence. Keep it private. Select rows with `row_type=training_pair`; the `manifest` row contains counts and the ITA notice, not a label. Only actual human false-positive and confirmed-match decisions are included, with original snapshots, actor and fanout provenance. Missing or purged evidence is counted as unavailable. Running a fine-tune is outside v1. [Milestone 8](docs/milestones/8.md) distinguishes synthetic-provider gates from actual local inference and unverified hosted access.
 
 ## Development checks
 

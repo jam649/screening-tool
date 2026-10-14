@@ -250,5 +250,30 @@ def export_evidence(
             artifact.close()
 
 
+@export_cli.command("training-pairs")
+def export_training_pairs_cli(
+    output: Annotated[Path, typer.Option(help="Explicit destination for human training-pair CSV.")],
+):
+    """Export retained human labels and their original immutable comparison snapshots."""
+    from app.reports.training import export_training_pairs
+
+    artifact = None
+    try:
+        with operator_database() as (_, factory):
+            with factory() as db:
+                artifact = export_training_pairs(db)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                assert artifact.body is not None
+                output.write_bytes(artifact.body)
+                typer.echo(
+                    json.dumps(
+                        {"output": str(output), "sha256": artifact.sha256, "size": artifact.size}
+                    )
+                )
+    finally:
+        if artifact is not None:
+            artifact.close()
+
+
 if __name__ == "__main__":
     cli()

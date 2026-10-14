@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.api.parties import filter_party_rows, party_rows, source_payload
 from app.api.review import historical_actor, safe_source_url
-from app.audit import PUBLIC_SETTING_KEYS, SECRET_KEY_MARKERS, audit
+from app.audit import PUBLIC_SETTING_KEYS, SECRET_KEY_MARKERS, audit, public_model_measurement
 from app.canonical import HASH_RULE_VERSION, canonical_hash
 from app.config import DISCLAIMER, PRODUCT_NAME
 from app.models import (
@@ -111,6 +111,7 @@ def _safe(value: Any, *, explanation: bool = False) -> Any:
             if (
                 (
                     any(marker in clean for marker in SECRET_KEY_MARKERS)
+                    and not public_model_measurement(key, item)
                     and not trusted_tokens
                     and not legal_reference
                     and not public_weight
@@ -806,13 +807,24 @@ def _pdf(document: dict) -> bytes:
             f"Hash rule: {settings.get('hash_rule_version', 1)} | "
             f"Model: {run.get('model_name') or 'deterministic-only'}"
         )
+        model_policy = settings.get("model") or {}
+        if not isinstance(model_policy, dict):
+            model_policy = {}
+        deterministic_weight = model_policy.get("w_det", settings.get("w_det", "unavailable"))
+        model_weight = model_policy.get("w_model", settings.get("w_model", "unavailable"))
         line(
             f"Frozen scoring policy: candidate {settings.get('candidate_min')}; "
             f"review {settings.get('review_threshold')}; "
             f"likely {settings.get('likely_threshold')}; "
-            f"deterministic weight {settings.get('w_det', 'unavailable')}; "
-            f"model weight {settings.get('w_model', 'unavailable')}"
+            f"deterministic weight {deterministic_weight}; "
+            f"model weight {model_weight}"
         )
+        if model_policy:
+            line(
+                f"Model provider: {model_policy.get('provider')} | "
+                f"Requested model: {model_policy.get('requested_model') or 'none'} | "
+                f"Configuration generation: {model_policy.get('generation')}"
+            )
         line("Frozen score weights:")
         for name, weight in sorted((settings.get("score_weights") or {}).items()):
             line(f"  {name.replace('_', ' ').capitalize()}: {weight}")

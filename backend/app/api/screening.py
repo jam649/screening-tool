@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy import select
 
 from app.api.audit import run_summary_payload
-from app.api.deps import DB, AdminUser, CurrentUser
+from app.api.deps import DB, AdminUser, AuthSession, CurrentUser
 from app.models import ScreeningRun
 from app.notifications.service import dispatch_outbox
 from app.scheduler.leases import (
@@ -35,9 +35,14 @@ class ScreenRequest(BaseModel):
 
 @router.post("")
 def screen(
-    body: ScreenRequest, request: Request, background: BackgroundTasks, db: DB, user: AdminUser
+    body: ScreenRequest,
+    request: Request,
+    background: BackgroundTasks,
+    db: DB,
+    user: AdminUser,
+    session: AuthSession,
 ):
-    actor_id = user.id
+    actor_id, session_id = user.id, session.id
     db.rollback()
     factory = request.app.state.session_factory
     operation = "screen_party" if body.party_id else "screen_all"
@@ -49,6 +54,7 @@ def screen(
             party_id=str(body.party_id) if body.party_id else None,
         ) as execution:
             with operation_session(factory, execution, actor_id) as operation_db:
+                operation_db.info["auth_session_id"] = session_id
                 run = run_screening(
                     operation_db, party_ids=[str(body.party_id)] if body.party_id else None
                 )

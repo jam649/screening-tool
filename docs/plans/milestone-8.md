@@ -1,12 +1,12 @@
 # Milestone 8 — Optional adjudicators and human training pairs
 
-Read-only preparation while milestone 7 final review/runtime verification is active. Implementation starts after milestone 7's packaged API/browser/restart gates and seven-job CI pass. Live Jev account access is unverified; no gate depends on a paid account. Preserve the measured Laya 0.4.6 result separately from current package metadata. Sources: [current adapter research](../research/model-adapters.md), [actual local benchmark](../research/laya-validation.md), design sections 7.6–7.9 and 10.3.
+Implementation is active after milestone 7's fresh packaged API/browser/restart gates and [all seven CI jobs](https://github.com/jam649/screening-tool/actions/runs/38537231097) passed on signed checkpoint `b0fc44e11f92c7e75ed81b20c62c885bb66f4dc1`. Live Jev account access is unverified; no gate depends on a paid account. Preserve the measured Laya 0.4.6 result separately from current package metadata. Sources: [current adapter research](../research/model-adapters.md), [actual local benchmark](../research/laya-validation.md), design sections 7.6–7.9 and 10.3.
 
 ## Scope and ownership
 
 - Codex adapter owner: a small `app/adjudicators/` boundary and focused tests; direct pinned-contract httpx transport, state/question construction, Noul validation, independent immutable per-call metadata, budgets, bounded retries and deterministic fallback.
 - Codex security/export owner: encrypted provider settings, exact hosted-data acknowledgment, local endpoint validation/test API and human-only immutable training export; corresponding meaningful role/privacy/export tests.
-- Actual Claude Opus 5.5 MEDIUM authoring: native Model settings/test controls and existing scoring-weight integration, with Codex mounting and full browser verification. Provider/key/runtime/customer records are excluded from source transfer.
+- Actual Claude Opus 5.5 MEDIUM authoring: native Model settings/test controls and existing scoring-weight integration, with Codex mounting and full browser verification. Model blend weights live in the single authoritative encrypted model configuration rather than being duplicated in general screening settings. Public model configuration generation participates in scoring fingerprints. Provider/key/runtime/customer records are excluded from source transfer.
 - Coordinator: actual screening hook registration for HTTP/scheduler/CLI, frozen run provenance, likely rail, training CLI compatibility, private transport injection, local Laya real gate and CI integration. Existing candidate generation, hashes, original dispositions and retention guarantees remain unchanged.
 
 ## Verified contracts and privacy
@@ -28,3 +28,7 @@ Blend and the deterministic likely-match rail must be enforced in the engine, in
 `screening-tool export training-pairs` uses original Hit snapshots and actual human `false_positive`/`confirmed_match` Dispositions. Include actor, immutable decision/hit/group/hash provenance. Exclude escalations, auto-clears, system list removals, zero-hit participation and suppressed repeats without a new human label. Preserve legitimate fanout labels with their actual recorded group rather than inventing new interactions. Purged comparison evidence is explicitly unavailable/omitted. No fine-tuning job is in v1.
 
 Gate fixed-wire requests/strict response errors and finite probabilities, bounded transient retry/fallback, exact acknowledgment/role/CSRF/key redaction, fixed-order real-tokenizer truncation, likely rail under adversarial low model output, frozen old inputs/hashes under concurrent source change, original human-only export including fanout/purge omissions, real reachable local Laya probabilities and unreachable fallback through the normal runtime/CLI/browser. Preserve the existing Laya process and every prior fixture volume/key. Final complete suites, dependency audits, signed source publication and CI precede completion. Milestone 9 and v0.1.0 remain required.
+
+## Local completion checkpoint
+
+Complete backend/frontend verification, independent review corrections, fresh synthetic-provider API/native-browser gates and retained restart have passed. Actual same-host Laya probability, usage, unreachable fallback and immutable retained restart also passed with zero synthetic model calls. All eight CI jobs and signed publication remain required; [milestone 8 evidence](../milestones/8.md) gives counts, preserved failed attempts and limitations. Milestone 9 has not begun.

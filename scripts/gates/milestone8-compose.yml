@@ -1,0 +1,10 @@
+# Fixture-only override. Use a fresh named volume; preserve it and its key for restart.
+# Production Compose never enables these synthetic model routes or transports.
+services:
+  screening-tool:
+    command: ["python", "/tmp/gates/milestone8.py", "--serve-fixture"]
+    environment:
+      SCREENING_TOOL_DATABASE_URL: sqlite:////data/milestone8-fixture.db
+      SCREENING_TOOL_SCHEDULER_ENABLED: "true"
+    volumes:
+      - ./scripts/gates:/tmp/gates:ro

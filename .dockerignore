@@ -18,3 +18,9 @@
 **/*.sqlite*
 **/test-results
 **/playwright-report
+
+# Required licensed offline tokenizer; other data/cache files remain excluded.
+!backend/app/adjudicators/data
+backend/app/adjudicators/data/*
+!backend/app/adjudicators/data/laya-multilingual-tokenizer.json.gz
+!backend/app/adjudicators/data/NOTICE.txt

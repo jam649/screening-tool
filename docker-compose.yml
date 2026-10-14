@@ -10,6 +10,8 @@ services:
       SCREENING_TOOL_ALLOWED_HOSTS: '${SCREENING_TOOL_ALLOWED_HOSTS:-["localhost","127.0.0.1","::1"]}'
       SCREENING_TOOL_ALLOWED_ORIGINS: '${SCREENING_TOOL_ALLOWED_ORIGINS:-[]}'
       TZ: ${TZ:-UTC}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - screening-data:/data
     restart: unless-stopped

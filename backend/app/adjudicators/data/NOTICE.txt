@@ -1,0 +1,10 @@
+Offline local tokenizer
+
+Bundled unchanged from convaiinnovations/laya, revision 7b928d828b7b0e022f929d9bd2e44165aa270148, multilingual/tokenizer/tokenizer.json. Publisher checkpoint license: Apache-2.0. Encoder/tokenizer source: jhu-clsp/mmBERT-base (MIT). No model weights are bundled.
+
+Original tokenizer SHA-256: 609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f
+Source: https://huggingface.co/convaiinnovations/laya/tree/7b928d828b7b0e022f929d9bd2e44165aa270148/multilingual/tokenizer
+Publisher card: https://huggingface.co/convaiinnovations/laya/raw/main/README.md
+Encoder card: https://huggingface.co/jhu-clsp/mmBERT-base/raw/main/README.md
+
+The application adapts the publisher's Apache-2.0 Noul head-budget calculation for the one pinned screening claim; the original runtime license, publisher model cards and MIT permission notice are retained under docs/licenses. The 5,333,263-byte gzip is a reproducible compression (mtime 0) of the verified 34,363,188-byte tokenizer. Runtime uses only Tokenizers; it performs no model-weight or tokenizer downloads.

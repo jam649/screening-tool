@@ -125,6 +125,28 @@ def _safe(value: Any) -> Any:
     return deepcopy(value)
 
 
+def public_model_measurement(key: str, value: Any) -> bool:
+    """Typed public counts/fingerprints are distinct from credential token values."""
+    if value is None and key in {
+        "input_tokens",
+        "output_tokens",
+        "sequence_tokens",
+        "laya_max_tokens",
+        "tokenizer_sha256",
+        "laya_tokenizer_sha256",
+    }:
+        return True
+    if key in {"input_tokens", "output_tokens", "sequence_tokens"}:
+        return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 10_000_000
+    if key == "laya_max_tokens":
+        return isinstance(value, int) and not isinstance(value, bool) and value == 1024
+    if key in {"tokenizer_sha256", "laya_tokenizer_sha256"}:
+        from app.adjudicators.contracts import LAYA_TOKENIZER_SHA256
+
+        return value == LAYA_TOKENIZER_SHA256
+    return False
+
+
 def redact_credentials(value: Any) -> Any:
     """Remove credential-bearing fields at every level of connector configuration."""
     if isinstance(value, dict):
@@ -135,6 +157,7 @@ def redact_credentials(value: Any) -> Any:
                     marker in "".join(c for c in key.casefold() if c.isalnum())
                     for marker in SECRET_KEY_MARKERS
                 )
+                and not public_model_measurement(key, item)
                 and not (
                     key in {"token_set", "token_sort"}
                     and isinstance(item, (int, float))

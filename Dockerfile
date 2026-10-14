@@ -24,6 +24,9 @@ COPY LICENSE THIRD_PARTY_LICENSES.md /app/licenses/
 COPY docs/licenses/ /app/licenses/third-party/
 ENV PATH="/app/backend/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_HUB_OFFLINE=1 \
+    DO_NOT_TRACK=1 \
     SCREENING_TOOL_DATABASE_URL=sqlite:////data/screening.db \
     SCREENING_TOOL_FRONTEND_DIST=/app/frontend/dist
 USER screening

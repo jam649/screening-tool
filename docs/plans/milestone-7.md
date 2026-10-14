@@ -1,6 +1,6 @@
 # Milestone 7 — Business Central
 
-Implementation follows the locally verified QuickBooks checkpoint and its signed corrective commit `eb663cd4ce8130ffcd594a114fbb90e24bd18c59`. All six jobs in [milestone 6 CI](https://github.com/jam649/screening-tool/actions/runs/38525206949) passed on 2026-10-14; milestone 7 implementation, independent review and fresh packaged API/browser/restart gates have now passed. Signed publication and seven-job CI remain pending. This plan is not a completion claim. Live tenant/sandbox validation remains deferred by Jordan; responses and gates are explicitly synthetic.
+Implementation follows the locally verified QuickBooks checkpoint and its signed corrective commit `eb663cd4ce8130ffcd594a114fbb90e24bd18c59`. All six jobs in [milestone 6 CI](https://github.com/jam649/screening-tool/actions/runs/38525206949) passed on 2026-10-14; milestone 7 implementation, independent review and fresh packaged API/browser/restart gates have now passed. Signed commit `b0fc44e11f92c7e75ed81b20c62c885bb66f4dc1` passed [all seven CI jobs](https://github.com/jam649/screening-tool/actions/runs/38537231097); milestone 7 is complete. Live tenant/sandbox validation remains deferred by Jordan; responses and gates are explicitly synthetic.
 
 ## Ownership and supported authentication
 

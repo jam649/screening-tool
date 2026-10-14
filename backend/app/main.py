@@ -15,6 +15,7 @@ from app.api import (
     csl,
     dashboard,
     exports,
+    model_settings,
     monitoring,
     notifications,
     parties,
@@ -51,6 +52,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         application.state.session_factory.kw["info"]["bc_transport_loader"] = lambda: getattr(
             application.state, "bc_transport", None
         )
+        application.state.session_factory.kw["info"]["model_transport_loader"] = lambda: getattr(
+            application.state, "model_transport", None
+        )
         register_default_connectors()
         scheduler = None
         try:
@@ -75,6 +79,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     application.include_router(sources.router, prefix="/api/v1")
     application.include_router(qbo.router, prefix="/api/v1")
     application.include_router(bc.router, prefix="/api/v1")
+    application.include_router(model_settings.router, prefix="/api/v1")
     application.include_router(monitoring.router, prefix="/api/v1")
     application.include_router(notifications.router, prefix="/api/v1")
     application.include_router(exports.router, prefix="/api/v1")
