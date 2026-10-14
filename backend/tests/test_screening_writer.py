@@ -1,15 +1,12 @@
-"""Writer allocation helpers are exact deepcopy substitutes and restore GC state."""
+"""Writer allocation helpers are exact deepcopy substitutes."""
 
-import gc
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
-
 from app.audit import _safe
-from app.screening.writer import copy_tree, paused_gc
+from app.screening.writer import copy_tree
 
 
 def evidence_tree():
@@ -64,30 +61,3 @@ def test_safe_snapshot_conversion_is_unchanged():
         "features": [["token_set", 0.9], ["country", [1, {"US": True}]]],
         "observed_at": "2026-10-14T00:00:00+00:00",
     }
-
-
-def test_paused_gc_restores_previous_state_after_failure_and_nesting():
-    @paused_gc
-    def nested(fail):
-        assert not gc.isenabled()
-        if fail:
-            raise RuntimeError("synthetic failure")
-        return outer(False)
-
-    @paused_gc
-    def outer(fail):
-        assert not gc.isenabled()
-        return "done" if not fail else nested(True)
-
-    assert gc.isenabled()
-    assert nested(False) == "done"
-    assert gc.isenabled()
-    with pytest.raises(RuntimeError):
-        outer(True)
-    assert gc.isenabled()
-    gc.disable()
-    try:
-        assert outer(False) == "done"
-        assert not gc.isenabled()
-    finally:
-        gc.enable()

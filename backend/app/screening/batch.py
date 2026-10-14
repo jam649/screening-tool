@@ -4,40 +4,20 @@ rapidfuzz's public ``process.cdist`` only wraps the compiled implementation's
 result matrix in numpy. That matrix exposes the buffer protocol itself, so
 reading it through ``memoryview`` yields exactly the values the scalar scorers
 return (verified bitwise on the matching fixtures) while the comparisons run
-in C++ with the GIL released. rapidfuzz is pinned exactly; the module tests
-fail loudly if this internal interface ever changes.
+in C++ with the GIL released. No score_cutoff is passed: rapidfuzz's batch
+cutoff handling differs from the scalar scorers near the cutoff. rapidfuzz is
+pinned exactly; the module tests fail loudly if this internal interface ever
+changes.
 """
 
-import os
 from collections.abc import Callable, Sequence
-from pathlib import Path
 from typing import Any
 
 from rapidfuzz.process_cpp_impl import FLOAT64, INT64, cdist
 
-
-def _available_cpus() -> int:
-    # os.cpu_count() reports host CPUs inside containers; a cgroup v2 quota
-    # (the matching gate runs with --cpus 2) or CPU affinity can be lower.
-    available = os.cpu_count() or 1
-    if hasattr(os, "sched_getaffinity"):
-        available = min(available, len(os.sched_getaffinity(0)))
-    try:
-        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()
-        if quota != "max":
-            available = min(available, max(1, int(quota) // int(period)))
-    except (OSError, ValueError):
-        pass
-    return available
-
-
 # Absorbs float rounding between mathematically equal ratio formulations
 # (observed differences are below 1e-12 on a 0-100 scale).
 SLACK = 1e-6
-
-# Screening runs inside the single application process, so it never takes
-# more than four threads even on large hosts. Results never depend on this.
-WORKERS = min(4, _available_cpus())
 
 
 def score_rows(
@@ -46,7 +26,6 @@ def score_rows(
     scorer: Callable[..., Any],
     *,
     integer: bool = False,
-    score_cutoff: float | None = None,
     workers: int = 1,
 ) -> list[memoryview]:
     """One row of ``scorer(query, choice)`` results per query, in choice order."""
@@ -57,12 +36,12 @@ def score_rows(
             queries,
             choices,
             scorer=scorer,
-            score_cutoff=score_cutoff,
             dtype=INT64 if integer else FLOAT64,
             workers=workers,
         )
     )
     # The matrix is C-contiguous; flatten it so rows are cheap 1-D slices.
+    # Integer results here are non-negative LCS lengths, so "Q" reads them exactly.
     flat: memoryview[Any] = matrix.cast("B").cast("Q" if integer else "d")
     width = len(choices)
     return [flat[row * width : (row + 1) * width] for row in range(len(queries))]

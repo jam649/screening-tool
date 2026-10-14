@@ -42,7 +42,7 @@ from app.screening.candidates import CandidateIndex
 from app.screening.normalize import party_record_hash
 from app.screening.score import below_minimum, bucket, party_features, score_pair
 from app.screening.settings import ScreeningSettings, ScreeningValidationError, load_settings
-from app.screening.writer import copy_tree, paused_gc
+from app.screening.writer import copy_tree
 
 
 class ScreeningBusyError(RuntimeError):
@@ -561,13 +561,12 @@ def _prepare(
         )
     }
     index = CandidateIndex(entries, settings)
-    index.prefetch_fallbacks(parties)
     # One immutable prepared snapshot per entry; actual persisted Hit snapshots
     # and inference inputs are still copied independently before use.
     entry_snapshots = {entry.id: snapshot(entry) for entry in entries}
     # Normalized comparison inputs live only for this snapshot; each entry's
     # are derived on first use, exactly when score_pair would first need them.
-    name_bounds = NameBounds(settings, index.names)
+    name_bounds = NameBounds(settings)
     pairs: dict[str, list[PreparedPair]] = {}
     candidate_counts = {}
     for party in parties:
@@ -647,7 +646,6 @@ def _prepare(
     return prepared, adjudicate
 
 
-@paused_gc
 def _execute(
     db: Session,
     *,
