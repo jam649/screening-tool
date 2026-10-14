@@ -115,16 +115,22 @@ def audit(
     return row
 
 
+_PRIMITIVES = frozenset({str, int, float, bool, type(None)})
+
+
 def _safe(value: Any) -> Any:
     # Exact immutable primitives need no copy; containers and custom types still do.
-    if type(value) in (str, int, float, bool, type(None)):
+    # Children are tested inline: every hit snapshot visits thousands of leaves.
+    if type(value) in _PRIMITIVES:
         return value
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, dict):
-        return {key: _safe(item) for key, item in value.items()}
+        return {
+            key: item if type(item) in _PRIMITIVES else _safe(item) for key, item in value.items()
+        }
     if isinstance(value, (list, tuple)):
-        return [_safe(item) for item in value]
+        return [item if type(item) in _PRIMITIVES else _safe(item) for item in value]
     return deepcopy(value)
 
 

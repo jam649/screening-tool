@@ -41,6 +41,7 @@ from app.screening.candidates import CandidateIndex
 from app.screening.normalize import party_record_hash
 from app.screening.score import bucket, score_pair
 from app.screening.settings import ScreeningSettings, ScreeningValidationError, load_settings
+from app.screening.writer import copy_tree, paused_gc
 
 
 class ScreeningBusyError(RuntimeError):
@@ -613,6 +614,7 @@ def _prepare(
     return prepared, adjudicate
 
 
+@paused_gc
 def _execute(
     db: Session,
     *,
@@ -705,8 +707,12 @@ def _execute(
             and reference.entry_hash == current_entry.entry_hash
         ):
             forced.setdefault(reference.party_id, set()).add(reference.csl_entry_id)
+    # Run counters are assigned once before completion. Every intermediate UPDATE
+    # rewrote the whole run row, including its scope manifest, inside this same
+    # transaction, so no reader could ever observe those values.
+    totals = dict.fromkeys(("parties_screened", "hits_new", "hits_suppressed", "auto_cleared"), 0)
     for party in parties:
-        original_party = deepcopy(vars(party))
+        original_party = copy_tree(vars(party))
         counts = {
             key: 0
             for key in (
@@ -719,12 +725,12 @@ def _execute(
                 "new_queue",
             )
         }
-        run.parties_screened += 1
+        totals["parties_screened"] += 1
         for comparison in prepared.pairs[party.id]:
             entry = SimpleNamespace(**comparison.entry)
             scored = SimpleNamespace(score=comparison.score)
-            party_snapshot, entry_snapshot = deepcopy(original_party), deepcopy(comparison.entry)
-            explanation = deepcopy(comparison.explanation)
+            party_snapshot, entry_snapshot = copy_tree(original_party), copy_tree(comparison.entry)
+            explanation = copy_tree(comparison.explanation)
             exact_key = party.id, entry.id, party.record_hash, entry.entry_hash
             suppression = exact_suppressions.get(exact_key)
             prior = prior_suppressions.get((party.id, entry.id))
@@ -852,7 +858,7 @@ def _execute(
             db.add(hit)
             counts[hit_bucket] += 1
             if suppression:
-                run.hits_suppressed += 1
+                totals["hits_suppressed"] += 1
                 counts["suppressed"] += 1
             elif auto_clear:
                 db.flush()
@@ -894,10 +900,10 @@ def _execute(
                 finally:
                     if requested_actor is not None:
                         db.info["actor_user_id"] = requested_actor
-                run.auto_cleared += 1
+                totals["auto_cleared"] += 1
                 counts["auto_cleared"] += 1
             elif hit_bucket != "low" and not anchor:
-                run.hits_new += 1
+                totals["hits_new"] += 1
                 counts["new_queue"] += 1
             if completed_decision is not None:
                 counts["completed_human"] += 1
@@ -921,7 +927,7 @@ def _execute(
                 party_id=party.id,
                 party_hash=party.record_hash,
                 party_snapshot=original_party,
-                source_snapshot=deepcopy(source_snapshot),
+                source_snapshot=copy_tree(source_snapshot),
                 scoring_context=context_hash,
                 decision_context=decision_context,
                 candidates_considered=prepared.candidate_counts[party.id],
@@ -930,11 +936,13 @@ def _execute(
             )
         )
         # Audit listeners can otherwise accumulate an entire book in one flush.
-        if run.parties_screened % 100 == 0:
+        if totals["parties_screened"] % 100 == 0:
             db.flush()
     db.flush()
     from app.notifications.service import enqueue_likely_alert
 
+    for counter, total in totals.items():
+        setattr(run, counter, total)
     run.settings_snapshot = {**run_snapshot, "adjudication_summary": call_summary}
     enqueue_likely_alert(db, run)
     run.finished_at = utcnow()
