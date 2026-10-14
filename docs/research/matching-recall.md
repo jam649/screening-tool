@@ -199,8 +199,8 @@ process-wide and includes setup. The full gate peak additionally includes queue,
 coverage and streamed immutable fingerprint reads. A profiler-enabled baseline
 has extra tracing overhead and is not compared as an uninstrumented timing.
 
-The final constrained-container result is pending. The coordinator controls the
-20k-party/25k-entry run, after these smaller measurements. The
+The release result is recorded under
+[v0.1.0 release benchmark](#v010-release-benchmark) below. The
 engineering target is five minutes, with a ten-minute bound and process RSS below
 3 GiB on a declared 2-vCPU/4-GiB fixture container; it is not a universal hardware
 or AI-enabled performance guarantee. Generated databases and detailed reports
@@ -234,8 +234,8 @@ the explicit 600-second bound. Setup took 16.740 seconds; all 20,000 candidate
 queries completed with 4,492,235 candidate comparisons and 169 fallback parties.
 Preparation took 342.760 seconds; the writer was still running at 257.717 seconds
 when the alarm fired. Engine peak RSS was 1,645.34 MiB. This is a failed
-prior-checkpoint result, not a completed-run performance claim; the coordinator
-preserves its container/volume/report and controls the final rerun.
+prior-checkpoint result, not a completed-run performance claim; its
+container, volume and report are preserved.
 
 Fresh 1k/25k mechanism profiles retained every actual snapshot and audit write.
 The profiled writer spent 2.892 seconds constructing/redacting its final Run
@@ -279,8 +279,8 @@ remained identical after repeat; actual scope hashes, current coverage and disab
 provider/null probability proofs passed. The final database/WAL checkpoints were
 630,923,264/467,566,472 bytes after cold and 1,093,218,304/480,293,152 after repeat,
 with the same 70,241/110,473 total audit rows. Local five/ten-minute and 3-GiB
-resource booleans passed. The constrained 20k cold checkpoint below has completed;
-its unchanged repeat remains pending.
+resource booleans passed. The constrained 20k checkpoint and release results
+follow below.
 
 The final history review also identified a tied-start ordering defect: current
 observations were ordered by hit insertion time while covering scopes were
@@ -315,9 +315,10 @@ The cold run proved every actual party and entry scope hash, current coverage,
 and disabled-provider/null-probability evidence. It wrote 260,640 total audit
 rows; database/WAL sizes were 2,647,789,568/2,459,627,672 bytes. Cold screening
 met the ten-minute bound and 3-GiB process target, but exceeded the five-minute
-target. The unchanged repeat is still running at this checkpoint: repeat anchor
-stability and immutable-original fingerprints are not yet claimed, and no
-overall benchmark or release pass is declared.
+target. Its unchanged repeat finished candidate scoring but stopped when the
+local Docker data disk reached zero free bytes, with the protected operation
+still running. That attempt is a failed environment checkpoint, not a pass; the
+release results below supersede it.
 
 A separate attempt on this same image exited 137 with `OOMKilled` reported and
 no completed report. The Docker VM then had roughly 534 MiB available while
@@ -328,3 +329,86 @@ with a 1,622.91-MiB peak, without a product change. This supports global VM
 pressure as the cause of that OOM; it does not prove a container-limit failure or
 turn the diagnostic into a 4-GiB pass. The first earlier-image 600-second failure
 above and both failed volumes remain preserved.
+
+## v0.1.0 release benchmark
+
+The first GitHub-hosted run of the declared container check on `5e4ad66`
+([CI run 38574776084](https://github.com/jam649/screening-tool/actions/runs/38574776084))
+confirmed 2 CPUs, 4 GiB and no network, then stopped the cold screen at the
+600-second bound (603.8 seconds, 1,649.21-MiB engine peak). The same image ran
+locally on a host shared with concurrent benchmarks: cold screening took 482.1
+seconds and the unchanged repeat was stopped at 601.0 seconds. Both are failed
+gate attempts.
+
+A separately labeled local diagnostic of that image used the same container and
+canonical gate with a 30-minute per-run alarm. It verifies full-scale repeat
+behavior; it does not claim the ten-minute bound. Every correctness check passed:
+
+| Logic diagnostic (not a gate pass) | Cold | Unchanged repeat |
+| --- | ---: | ---: |
+| Wall seconds | 575.1 | 526.6 |
+| Engine peak MiB | 1,644.4 | 2,085.8 |
+| Stored hits | 215,624 | 215,624 |
+| New / current queue anchors | 23,964 / 23,964 | 0 / 23,964 |
+| Party / zero-hit evidence rows | 20,000 / 3,506 | 20,000 / 3,506 |
+
+The original Hit, Run and party-evidence fingerprint was unchanged after the
+repeat, and the disabled-model checks passed. Host contention inflated these
+times; they are evidence of behavior, not performance.
+
+Two exact speedups then removed most of the measured cost:
+
+- Preparation computes proven upper bounds on every name comparison from batched
+  rapidfuzz calls and skips only comparisons and pairs that cannot reach
+  `candidate_min` or change the stored best comparison. `token_sort_ratio` equals
+  the ratio of sorted-token strings; `token_set_ratio` equals it when the token
+  sets are disjoint and unrepeated and is otherwise computed exactly;
+  `partial_ratio` is at most 200h/(m+h) for multiset character overlap h and
+  shorter length m. Context deltas are exact, and addition, clamping and rounding
+  are monotone. Every remaining pair is scored by the unchanged scorer.
+- The writer copies JSON evidence with an exact type-preserving tree copy instead
+  of `deepcopy` and assigns run counters once at completion instead of rewriting
+  the run row at every flush.
+
+Results are unchanged. A differential harness compared base and new preparation
+on fixture books under seven weight, threshold, suffix and forced-candidate
+policies, with zero differences in candidates, scores, eligibility or
+explanations. A deterministic harness compared every persisted table byte for
+byte after cold, repeat and auto-clear/human-decision screens, also with zero
+differences. Independent differential fuzzing checked about 600,000 string pairs
+and 850,000 bound evaluations for the ceilings, 3.9 million explanation
+comparisons for the reordered scorer and 650,000 retained pairs for pair
+exclusion. `matching.py --recall` output is byte-identical. A batched fallback
+scan and a writer garbage-collection pause were deferred after review found a
+non-integer-cutoff boundary difference and memory risks; the fallback is the
+original implementation.
+
+| Release CI measurement ([run 38612203195](https://github.com/jam649/screening-tool/actions/runs/38612203195)) | Cold | Unchanged repeat |
+| --- | ---: | ---: |
+| Wall / CPU seconds | 268.854 / 249.707 | 395.484 / 282.245 |
+| Preparation / writer seconds | 116.314 / 128.210 | 122.021 / 220.688 |
+| Engine / full gate peak MiB | 1,759.61 / 1,759.61 | 2,101.90 / 2,101.90 |
+| Stored hits / new queue anchors | 215,624 / 23,964 | 215,624 / 0 |
+| Queue / coverage read seconds | 26.014 / 0.253 | 162.622 / 0.972 |
+
+Setup took 19.130 seconds. The container was limited to 2 of the runner's 4 CPUs.
+Both runs met the ten-minute bound and the 3-GiB process check. The cold run also
+met the five-minute engineering target; the repeat did not (395.5 seconds), so
+that target is reported as not met. The repeat created no new queue anchors, kept
+the same 23,964 current anchors and left the original Hit, Run and
+party-evidence fingerprint unchanged. Each run made 4,492,235 candidate
+comparisons with 169 fallback parties and recorded 20,000 party evidence rows,
+3,506 of them zero-hit. Total audit rows were 260,640 after cold and 476,271
+after repeat; database/WAL sizes were 2,642,317,312/2,454,003,872 bytes after
+cold and 5,080,727,552/2,518,234,672 after repeat. With models disabled there
+were 105,657 hypothetically eligible pairs and zero model calls.
+
+Reading the review queue scans every stored hit's full record, because the
+queue's sort columns follow the large JSON snapshots in each row. On the release
+runner the gate's queue read took 26.0 seconds after the cold screen and 162.6
+seconds after the repeat, with 431,248 stored hits. Locally, a cold-cache read in
+a 4-GiB container holding about 2 GiB of process memory took 247–311 seconds,
+and 1,195–1,517 seconds under heavy host I/O contention; with a partly warm page
+cache it took 77 seconds. Loading anchors in physical order or enlarging SQLite's page cache
+each saved about 20%. Large books therefore need memory headroom for the page
+cache, and a schema-level projection for queue reads is follow-up work.
