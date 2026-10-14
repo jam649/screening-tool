@@ -1,0 +1,29 @@
+name: DCO
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  sign-off:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify sign-offs on every contribution
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+          commits = subprocess.check_output(['git', 'rev-list', f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"], text=True).splitlines()
+          failures = []
+          for commit in commits:
+              body = subprocess.check_output(['git', 'show', '-s', '--format=%B', commit], text=True)
+              if not re.search(r'^Signed-off-by: .+ <[^<>\s]+@[^<>\s]+>$', body, re.MULTILINE):
+                  failures.append(commit)
+          if failures:
+              raise SystemExit('Missing DCO sign-off: ' + ', '.join(failures))
+          print(f'Verified {len(commits)} commit sign-offs')
+          PY

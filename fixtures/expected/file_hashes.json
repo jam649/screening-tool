@@ -1,0 +1,8 @@
+{
+  "csl_sample_v1.json": "a3d69363591beae1393e60a2b04edbfde60df440c0074292c2df940d7b9ec3a4",
+  "csl_sample_v2.json": "660869b1156a12371fec0142a0ea8c4abec4a10e22347bd13bd3677935f409d6",
+  "parties.csv": "679766d38401aa3311e438ccc4661ff364568755839bc5c6743fbbacdcce6d04",
+  "provenance.json": "316b9bb7cbbde8cd9239cba3510d7c5456d2cc1db3d3f17d749ea26a1652e648",
+  "expected/hits.json": "bc91c6dc93dced4cb78e3fd34cb5b89fb81745e63b4458761076e54318b6a8bb",
+  "expected/csl_diff.json": "f29a90b7fac1af19532fb07507b11d996c78cd934e1e21c527209a115ddb55d6"
+}

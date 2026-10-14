@@ -1,0 +1,109 @@
+{
+  "source_url": "https://data.trade.gov/downloadable_consolidated_screening_list/v1/consolidated.json",
+  "bulk_sha256": "fd63c5fcfbe921972ef691785c4dd4573a783ec7425787270b25e399f2b889e3",
+  "semantic_sha256": "78ef88cd7303bb56599e8414dde773988141107ef0607453761b71a81854d1f2",
+  "seed": 20261013,
+  "sample_entries": 300,
+  "background_parties": 2000,
+  "planted_parties": 60,
+  "populated_sources": [
+    "ACN",
+    "CAP",
+    "CMIC",
+    "DPL",
+    "DTC",
+    "EL",
+    "MEU",
+    "NS-MBS",
+    "PLC",
+    "SDN",
+    "SSI",
+    "UVL"
+  ],
+  "source_list_stamps": {
+    "CAP": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-10-13T14:02:11+00:00",
+      "source": "Capta List (CAP) - Treasury Department",
+      "import_rate": "Hourly"
+    },
+    "CMIC": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-10-13T14:02:11+00:00",
+      "source": "Non-SDN Chinese Military-Industrial Complex Companies List (CMIC) - Treasury Department",
+      "import_rate": "Hourly"
+    },
+    "DPL": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-04-28T12:39:28+00:00",
+      "source": "Denied Persons List (DPL) - Bureau of Industry and Security",
+      "import_rate": "Hourly"
+    },
+    "DTC": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-07-24T00:00:00+00:00",
+      "source": "ITAR Debarred (DTC) - State Department",
+      "import_rate": "Hourly"
+    },
+    "EL": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-08-21T20:19:33+00:00",
+      "source": "Entity List (EL) - Bureau of Industry and Security",
+      "import_rate": "Hourly"
+    },
+    "FSE": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-10-13T14:02:11+00:00",
+      "source": "Foreign Sanctions Evaders (FSE) - Treasury Department",
+      "import_rate": "Hourly"
+    },
+    "ACN": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-10-02T14:20:52+00:00",
+      "source": "Nonproliferation Sanctions (ACN) - State Department",
+      "import_rate": "Hourly"
+    },
+    "NS-MBS": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-10-13T14:02:11+00:00",
+      "source": "Non-SDN Menu-Based Sanctions List (NS-MBS List) - Treasury Department",
+      "import_rate": "Hourly"
+    },
+    "MEU": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-02-20T18:34:52+00:00",
+      "source": "Military End User (MEU) List - Bureau of Industry and Security",
+      "import_rate": "Hourly"
+    },
+    "PLC": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-10-13T14:02:11+00:00",
+      "source": "Palestinian Legislative Council List (PLC) - Treasury Department",
+      "import_rate": "Hourly"
+    },
+    "SDN": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-10-13T14:02:08+00:00",
+      "source": "Specially Designated Nationals (SDN) - Treasury Department",
+      "import_rate": "Hourly"
+    },
+    "SSI": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-10-13T14:02:11+00:00",
+      "source": "Sectoral Sanctions Identifications List (SSI) - Treasury Department",
+      "import_rate": "Hourly"
+    },
+    "UVL": {
+      "last_imported": "2026-10-14T00:15:00.015067+00:00",
+      "source_last_updated": "2026-02-10T23:02:53+00:00",
+      "source": "Unverified List (UVL) - Bureau of Industry and Security",
+      "import_rate": "Hourly"
+    }
+  },
+  "notes": [
+    "All v1 listings are unchanged public government rows.",
+    "V2 adds five other government rows, changes five synthetic aliases, removes five rows.",
+    "All party records are synthetic test data; resemblance to real businesses is incidental.",
+    "FSE metadata is present, but the verified bulk file contains no current FSE listings."
+  ]
+}

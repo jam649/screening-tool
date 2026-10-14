@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "project": {
+    "name": "screening-tool",
+    "productType": "Self-hosted customer and vendor screening compliance workspace",
+    "stack": [
+      "React 18",
+      "Vite",
+      "TypeScript",
+      "TanStack Query",
+      "React Router",
+      "CSS"
+    ]
+  },
+  "sources": {
+    "tokens": [
+      "frontend/src/styles.css",
+      "frontend/src/csl.css"
+    ],
+    "components": [
+      "frontend/src/App.tsx",
+      "frontend/src/Overview.tsx",
+      "frontend/src/CSLPanel.tsx"
+    ],
+    "assets": [],
+    "instructions": [
+      "docs/design-v1.md"
+    ]
+  },
+  "design": {
+    "colorMode": "light",
+    "colors": {
+      "ink": "#172d35",
+      "accent": "#176b61",
+      "background": "#f5f6f3",
+      "surface": "#ffffff",
+      "muted": "#65777c",
+      "border": "#dce4df"
+    },
+    "typography": {
+      "family": "Inter, system-ui, sans-serif",
+      "body": "14px",
+      "pageTitle": "32px"
+    },
+    "spacing": {
+      "unit": "4px"
+    },
+    "radius": {
+      "control": "5px",
+      "panel": "8px"
+    },
+    "shadows": {
+      "panel": "0 2px 3px #173b2810"
+    },
+    "motion": {
+      "duration": "150ms",
+      "reducedMotion": "disable"
+    },
+    "density": "compact but readable"
+  },
+  "components": {
+    "installed": [],
+    "preferredPrimitives": [
+      "Native semantic HTML",
+      "Project Button",
+      "Project ErrorMessage",
+      "Project Brand"
+    ],
+    "patterns": [
+      "Dark navy sidebar",
+      "Pale warm-gray content canvas",
+      "Two-column comparison queue",
+      "Status tables",
+      "No charts"
+    ]
+  },
+  "constraints": {
+    "must": [
+      "Desktop-first with usable responsive layout",
+      "Keyboard navigation and visible focus states",
+      "Exact ITA disclaimer first run and Settings",
+      "Review queue is the primary workflow",
+      "First-run wizard must create administrator before any protected page",
+      "Admin-only Settings"
+    ],
+    "avoid": [
+      "Charts",
+      "Decorative gradients",
+      "Unnecessary motion",
+      "Claims that a party is approved or compliant",
+      "External fonts or telemetry",
+      "Invented record counts in implemented UI"
+    ]
+  },
+  "decisions": [
+    {
+      "decision": "Use calm navy and teal workspace with warm off-white background, compact data tables, low-radius panels, and restrained typography.",
+      "source": "Design specification and agent selection under user authorization for unattended implementation."
+    }
+  ],
+  "evidence": [
+    {
+      "type": "catalog-reference",
+      "url": "https://21st.dev/@ssychui/components/onboarding-checklist",
+      "componentId": 30552,
+      "use": "Retrieved public component; adapted compact progress count and derived checklist state using native semantic HTML. No animation dependency or catalog code copied."
+    },
+    {
+      "type": "service-limitation",
+      "detail": "21st AI enabled but hosted sketch generation returned: Sketch is temporarily unavailable. Fewer than three models are healthy. Local source review blocked by automatic approval review to avoid transmitting project content."
+    },
+    {
+      "type": "implementation-authorship",
+      "detail": "Claude Opus 5.5 (first-party claude-opus-5-5, high effort, session daed6127-c517-4c72-a3f6-12fbfec7b81f) authored CSL overview, settings panel, status hook, responsive styles and Playwright contract tests through no-tool structured output. Sol integrated the existing App and verified browser state handling."
+    }
+  ],
+  "generatedAt": "2026-10-14T00:03:32.076Z"
+}

@@ -1,0 +1,686 @@
+{
+  "seed": 20261013,
+  "case_count": 60,
+  "cases": [
+    {
+      "external_id": "case-exact-01",
+      "category": "exact",
+      "source_list": "CAP",
+      "csl_id": "15268",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-exact-02",
+      "category": "exact",
+      "source_list": "DPL",
+      "csl_id": "00143a2eff1aa522d73b5209f1c43f97795b8c63a8eb7379760d3d22",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-exact-03",
+      "category": "exact",
+      "source_list": "DPL",
+      "csl_id": "002092437b64dc7961c9d26c5c29572a2247c56d6f67660d14e51e8c",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-exact-04",
+      "category": "exact",
+      "source_list": "DPL",
+      "csl_id": "004e4798add14d6d78514b91507d38ea0c2d0ed534cd977a316fdde3",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-exact-05",
+      "category": "exact",
+      "source_list": "DPL",
+      "csl_id": "006260ba3a6378cb8e90dc6ac6d4f9dfa60eb05c2a334be2d2db36cb",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-exact-06",
+      "category": "exact",
+      "source_list": "DPL",
+      "csl_id": "007f498c8c9d9114a69b96f2ebb82335ba4d1d00699821de62021e5f",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-exact-07",
+      "category": "exact",
+      "source_list": "DPL",
+      "csl_id": "00f3cd508da2a5bab430b8fe1fb5d8453c3dfc74118f981f2aef4df3",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-exact-08",
+      "category": "exact",
+      "source_list": "DPL",
+      "csl_id": "014b6394098bca109e3d50f2ad12ccd034b658ed655f564eb4101d1d",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-exact-09",
+      "category": "exact",
+      "source_list": "DPL",
+      "csl_id": "015a54c351b8d535898ea30bc30d68d2911bff65a438259257641bda",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-exact-10",
+      "category": "exact",
+      "source_list": "DPL",
+      "csl_id": "01c42c3fecd467d4489fdb6939a09e6851001fa718b2a1a2d11b1c3e",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-01",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "01cb647d71b792ed1ec665c340a218f642916a19e033654b3cff564b",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-02",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "0210cf3ae02633f61cc0ad54efbc5dfedde6f372c8589911fb492654",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-03",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "023a85735574e3a8031de0784999612e5719881f00aab49bbfa7b280",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-04",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "02542f2a603ca4bb8cd87b6755f5e729faed9df40992f7f6ac70e478",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-05",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "02849641432f17e055c46b3f1cb5e14a16d78b60499ef23bd00d796f",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-06",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "028f5a58494efd5011e5695e52525d4f0ca1d3667d278627295c8a51",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-07",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "02a513fa54cedb021a58fe2ca8f64107c06a3f944e8e8c87d277183b",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-08",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "02bad486a85c2e4b03848443b04e522567ebb95e2dae224b652c6474",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-09",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "02faa8efcb481677052275107772f9f0e57a97ece54b90c68a161396",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-diacritics-10",
+      "category": "diacritics",
+      "source_list": "DPL",
+      "csl_id": "0306900d93382c74b6225ed712275d2c18761be3238ec4b1ad2c4a9d",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-01",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10007",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-02",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10044",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-03",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10047",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-04",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10048",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-05",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10049",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-06",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10051",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-07",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10114",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-08",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10131",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-09",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10132",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-token_order-10",
+      "category": "token_order",
+      "source_list": "SDN",
+      "csl_id": "10138",
+      "expected_buckets": [
+        "review",
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-01",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "04798e88d43a8fd1aff924f12db270f0152727eae91177cbaa2a53fe",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-02",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "05f4b3fd8d5c9517e79dd108946438268bc555bed5bfb6b6c80c31f6",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-03",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "067a85ff141997940c267776ee6b654ca0fc9986d96321fddef58496",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-04",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "07d53a1e4d2494e6321b5280fc90aa3355e75125a9f1d082a9603592",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-05",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "081ef03c31b1367d07ef866fd9d1a8607e66be5ada10388c53e27efe",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-06",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "089810fe82be6943f6a11f921d9ed76e73446f3cb404c79909fa897a",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-07",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "0961721985c795f1f8605bbbed7391cc87f7f0df4500698a785767b3",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-08",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "0c973996dd16a9b8760e117ff5858c0316c1fcb38462dc497a5729d8",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-09",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "0d07f889998ce5840e6691fe0992af03cf8f5fcfe6de963a5c8cccd3",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-legal_suffix-10",
+      "category": "legal_suffix",
+      "source_list": "DPL",
+      "csl_id": "0e9311d22ca3f2d14c39027b5541eac10b208f3739a036fc0c372a3a",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-01",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "29250",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-02",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "29259",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-03",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "29261",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-04",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "30343",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-05",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "30345",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-06",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "30503",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-07",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "30505",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-08",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "30510",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-09",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "30511",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-common_name_country-10",
+      "category": "common_name_country",
+      "source_list": "NS-MBS",
+      "csl_id": "30964",
+      "expected_buckets": [
+        "low",
+        "review"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-address_only-01",
+      "category": "address_only",
+      "source_list": "DPL",
+      "csl_id": "030715f53ed2be4179b7cb52f68ca5d3b170640606602b49f88e2953",
+      "expected_buckets": [],
+      "expected_below_candidate_min": true,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-address_only-02",
+      "category": "address_only",
+      "source_list": "DPL",
+      "csl_id": "0307d8f44fffb2314ed0f3da8e04e11aa455a3c8ebbcc3acf9dfb246",
+      "expected_buckets": [],
+      "expected_below_candidate_min": true,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-address_only-03",
+      "category": "address_only",
+      "source_list": "DPL",
+      "csl_id": "0318c6b0407b3fd5bda9c8ce16549cc1211fe62de8dd463a20d09bbb",
+      "expected_buckets": [],
+      "expected_below_candidate_min": true,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-address_only-04",
+      "category": "address_only",
+      "source_list": "DPL",
+      "csl_id": "03238ae264c854aa4b86c777e55b6835ddc74d8ddbe6d6877f7ddcb4",
+      "expected_buckets": [],
+      "expected_below_candidate_min": true,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-address_only-05",
+      "category": "address_only",
+      "source_list": "DPL",
+      "csl_id": "035a4a3a894d337ffb55de35d9a45833f20fbd117b9e354b39c2e457",
+      "expected_buckets": [],
+      "expected_below_candidate_min": true,
+      "removed_in_v2": false
+    },
+    {
+      "external_id": "case-removed-01",
+      "category": "removed",
+      "source_list": "DPL",
+      "csl_id": "037a28d6392e389eb297e5af90c78904c0b4ea6b9b8b3df795f93d9e",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": true
+    },
+    {
+      "external_id": "case-removed-02",
+      "category": "removed",
+      "source_list": "DPL",
+      "csl_id": "0389d22bf50af9ea62d63c9748d553ec351356bd4698487454f52675",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": true
+    },
+    {
+      "external_id": "case-removed-03",
+      "category": "removed",
+      "source_list": "DPL",
+      "csl_id": "03c01c3ada754e92e7d58690193c4c6d7bb194c82aae03097fe1e3e1",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": true
+    },
+    {
+      "external_id": "case-removed-04",
+      "category": "removed",
+      "source_list": "DPL",
+      "csl_id": "040bc27c5d906519e52d6fb7cd93d8939193e2786673bedde46d93b5",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": true
+    },
+    {
+      "external_id": "case-removed-05",
+      "category": "removed",
+      "source_list": "DPL",
+      "csl_id": "040de77d174df6821a3a4ad01a4463fe7c787f829b2a3894db16a52c",
+      "expected_buckets": [
+        "likely"
+      ],
+      "expected_below_candidate_min": false,
+      "removed_in_v2": true
+    }
+  ]
+}

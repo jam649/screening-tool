@@ -1,0 +1,71 @@
+{
+  "added": 5,
+  "changed": 5,
+  "removed": 5,
+  "added_ids": [
+    {
+      "source_list": "DPL",
+      "csl_id": "04ea2639b1200e684232e7cf226832740e9db81371086f356ece5d6e"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "050aa096220c51431cdda30b007308fa9ba4fc069bf2c9f92ace7d97"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "0550c435ae3c371d47ee378d6ceb504039219a5343f87265784a3ada"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "055bd9f68d685c442a65d1daa3458c063721887947dfda5d42211a9c"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "0568b1d306776b5d26563981336b3f15b6c5e416cf6cd60006260711"
+    }
+  ],
+  "changed_ids": [
+    {
+      "source_list": "CAP",
+      "csl_id": "15268"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "00143a2eff1aa522d73b5209f1c43f97795b8c63a8eb7379760d3d22"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "002092437b64dc7961c9d26c5c29572a2247c56d6f67660d14e51e8c"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "004e4798add14d6d78514b91507d38ea0c2d0ed534cd977a316fdde3"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "006260ba3a6378cb8e90dc6ac6d4f9dfa60eb05c2a334be2d2db36cb"
+    }
+  ],
+  "removed_ids": [
+    {
+      "source_list": "DPL",
+      "csl_id": "037a28d6392e389eb297e5af90c78904c0b4ea6b9b8b3df795f93d9e"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "0389d22bf50af9ea62d63c9748d553ec351356bd4698487454f52675"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "03c01c3ada754e92e7d58690193c4c6d7bb194c82aae03097fe1e3e1"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "040bc27c5d906519e52d6fb7cd93d8939193e2786673bedde46d93b5"
+    },
+    {
+      "source_list": "DPL",
+      "csl_id": "040de77d174df6821a3a4ad01a4463fe7c787f829b2a3894db16a52c"
+    }
+  ]
+}
