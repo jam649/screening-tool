@@ -181,7 +181,24 @@ def _apply(db: Session, parsed: ParsedCSL, fetch_id: str, warnings: list[str]) -
     ]
     removed = [entry for key, entry in active.items() if key not in incoming]
     if len(active) >= 20 and len(removed) > max(5, len(active) // 4):
-        raise CSLValidationError("Refusing a CSL refresh removing over 25% of active listings")
+        # Complete official snapshots can legitimately shrink. Cardinality is a
+        # health signal, never authority to retain listings removed by the source.
+        warning = (
+            f"The complete CSL snapshot removed {len(removed)} of {len(active)} active listings"
+        )
+        fetch.warnings = [*warnings, warning]
+        audit(
+            db,
+            "csl.large_removal",
+            "csl_fetches",
+            fetch.id,
+            after={
+                "active_before": len(active),
+                "removed": len(removed),
+                "remaining": len(parsed.entries),
+                "warning": warning,
+            },
+        )
     version = CSLVersion(
         fetched_at=fetch.fetched_at,
         file_sha256=parsed.file_sha256,
@@ -263,21 +280,27 @@ def _apply(db: Session, parsed: ParsedCSL, fetch_id: str, warnings: list[str]) -
             removed_ids = [entry.id for entry in removed]
             # Chunk ID predicates below SQLite's historical bind-parameter limit.
             for offset in range(0, len(removed_ids), 500):
-                for hit in db.scalars(
-                    select(Hit).where(
-                        Hit.csl_entry_id.in_(removed_ids[offset : offset + 500]),
-                        Hit.status == "open",
-                    )
-                ):
-                    hit.status = "dispositioned"
-                    db.add(
-                        Disposition(
-                            hit_id=hit.id,
-                            kind="auto_cleared",
-                            actor_user_id=None,
-                            note=f"entry removed from list in version {version.id}",
+                removed_hits = list(
+                    db.scalars(
+                        select(Hit).where(
+                            Hit.csl_entry_id.in_(removed_ids[offset : offset + 500]),
+                            Hit.status == "open",
                         )
                     )
+                )
+                db.add_all(
+                    Disposition(
+                        hit_id=hit.id,
+                        kind="auto_cleared",
+                        actor_user_id=None,
+                        note=f"entry removed from list in version {version.id}",
+                    )
+                    for hit in removed_hits
+                )
+                # Persist each system decision before its permitted status transition.
+                db.flush()
+                for hit in removed_hits:
+                    hit.status = "dispositioned"
                     audit(
                         db,
                         "csl.hit_closed",

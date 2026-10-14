@@ -15,7 +15,7 @@ from app.audit import audit
 from app.connectors.csv import UploadValidationError, preview_upload
 from app.connectors.sync import sync_csv
 from app.models import Source, utcnow
-from app.screening.engine import process_pending_tasks
+from app.screening.engine import ScreeningTasksFailedError, process_pending_tasks
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -156,11 +156,18 @@ def upload(
             raise HTTPException(422, "The column mapping must be a JSON object")
     try:
         result = sync_csv(db, source, data, filename, selected)
-        runs = process_pending_tasks(db) if result.applied else []
     except UploadValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
+    screening_errors = []
+    try:
+        runs = process_pending_tasks(db) if result.applied else []
+    except ScreeningTasksFailedError as exc:
+        runs = exc.completed_runs
+        screening_errors = exc.failures
     return {
         **result.payload(),
         "source": source_payload(source),
         "screening_run_ids": [run.id for run in runs],
+        "screening_errors": screening_errors,
+        "screening_pending": bool(screening_errors),
     }

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from test_csl import envelope, listing
 
 from app.csl.service import refresh_csl
-from app.models import AuditLog, Party, Source, User
+from app.models import AuditLog, Party, ScreeningRun, ScreeningTask, Source, User
 from app.screening.engine import queue_hits
 
 MAPPING = {"name": "Company", "country": "Country", "external_id": "ID", "city": "City"}
@@ -97,6 +97,52 @@ def test_source_upload_mapping_screening_reupload_rejection_and_audit(client, ad
         == 200
     )
     assert client.get(f"/api/v1/sources/{source_id}").json()["label"] == "Renamed books"
+
+
+def test_upload_reports_applied_import_and_completed_runs_when_old_task_fails(
+    client, admin, app, monkeypatch
+):
+    import json
+
+    from app.screening import engine
+
+    headers = {"X-CSRF-Token": admin["csrf_token"]}
+    created = client.post("/api/v1/sources", headers=headers, json={"label": "New books"})
+    source_id = created.json()["id"]
+    with app.state.session_factory() as db:
+        refreshed = refresh_csl(db, data=envelope([listing(42)]))
+        old_task_id = refreshed.pending_task_id
+    original_execute = engine._execute
+
+    def execute(db, **kwargs):
+        if kwargs["trigger"] == "list_change":
+            raise RuntimeError("private-credential-in-exception")
+        return original_execute(db, **kwargs)
+
+    monkeypatch.setattr(engine, "_execute", execute)
+    response = client.post(
+        f"/api/v1/sources/{source_id}/upload",
+        headers=headers,
+        files={
+            "file": (
+                "book.csv",
+                file_content([["c1", "Example Manufacturing 42", "US", "Boston", ""]]),
+                "text/csv",
+            )
+        },
+        data={"mapping": json.dumps(MAPPING)},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["applied"] and payload["added"] == 1 and payload["screening_pending"]
+    assert len(payload["screening_run_ids"]) == 1
+    assert payload["screening_errors"][0]["task_id"] == old_task_id
+    assert "private-credential" not in response.text
+    with app.state.session_factory() as db:
+        assert db.scalar(select(Party)).name == "Example Manufacturing 42"
+        assert db.get(ScreeningTask, old_task_id).status == "failed"
+        assert db.get(ScreeningRun, payload["screening_run_ids"][0]).finished_at is not None
+        assert len(queue_hits(db)) == 1
 
 
 def test_preview_caps_and_dummy_download(client, admin):

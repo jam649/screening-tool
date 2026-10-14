@@ -8,6 +8,7 @@ Source: [Design Document v1](../design-v1.md), supplied 2026-10-13. Build all ni
 - Use 21st for UI design, replacing Superdesign.
 - Build now with synthetic CSV data; live QuickBooks and Business Central sandbox checks are deferred until credentials/tenants are supplied. Recorded-contract tests gate connector implementation for now. Never report these as live sandbox passes.
 - Use `AGENTS.md` instead of the obsolete `CLAUDE.md` workflow entry.
+- On 2026-10-13 explicitly include party type and CSL entity type in both matching hashes (hash rule version 2); type-only edits must re-screen and invalidate remembered four-hash false positives. CSL hash text also follows section 4.1 normalization with Unicode/ASCII forms and unordered alias/address/country/program sets. Preserve immutable version 1 evidence. Cached records transition through explicit `screening-tool hashes upgrade` and `screening-tool screen --changed` commands; the upgrade queues a full screening and records the policy change. An automatic startup rewrite was rejected by approval review and is not wired into application startup. New completed run manifests include actual party and entry hashes so coverage does not reinterpret a historical v1 revision hash as v2.
 
 ## Ordered milestones
 

@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from app.cli import cli
 from app.csl.service import refresh_csl
 from app.models import (
+    CSLEntry,
     Disposition,
     Hit,
     Party,
@@ -21,9 +22,13 @@ from app.models import (
 from app.screening.candidates import CandidateIndex
 from app.screening.engine import (
     Adjudication,
+    ScreeningBusyError,
+    ScreeningTasksFailedError,
     process_pending_tasks,
+    queue_hit_is_current,
     queue_hits,
     run_screening,
+    snapshot,
 )
 from app.screening.normalize import normalize_country, normalize_name, party_record_hash
 from app.screening.score import bucket, score_pair
@@ -100,6 +105,7 @@ def test_country_and_hash_contract():
     )
     assert party_record_hash(fields) != party_record_hash(fields | {"city": "Changed"})
     assert party_record_hash(fields) != party_record_hash(fields | {"name": "ACME LLC"})
+    assert party_record_hash(fields) != party_record_hash(fields | {"party_type": "individual"})
 
 
 @pytest.mark.parametrize(
@@ -236,12 +242,12 @@ def test_exact_suppression_and_changed_hash_prior_history(seeded, admin):
     db, record, _ = seeded
     run_screening(db)
     hit = db.scalar(select(Hit))
-    hit.status = "dispositioned"
     disposition = Disposition(
         hit_id=hit.id, kind="false_positive", actor_user_id=admin["user"]["id"]
     )
     db.add(disposition)
     db.flush()
+    hit.status = "dispositioned"
     db.add(
         Suppression(
             party_id=record.id,
@@ -398,7 +404,7 @@ def test_failed_task_is_atomic_sanitized_and_retries(seeded, monkeypatch):
         raise RuntimeError("credential-must-not-be-recorded")
 
     monkeypatch.setattr(engine, "score_pair", fail)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ScreeningTasksFailedError):
         process_pending_tasks(db)
     task = db.scalar(select(ScreeningTask))
     assert task.status == "failed" and task.attempts == 1
@@ -446,3 +452,212 @@ def test_screen_cli_all_party_changed_and_scope_validation(seeded, config, monke
     assert response.exit_code != 0
     response = runner.invoke(cli, ["screen", "--all", "--party", record.id])
     assert response.exit_code != 0
+
+
+def test_queue_excludes_disabled_source_lists_without_rewriting_evidence(seeded):
+    db, _, _ = seeded
+    run_screening(db)
+    original = queue_hits(db)[0]
+    setting = Setting(key="enabled_source_lists", value=[])
+    db.add(setting)
+    db.commit()
+    assert queue_hits(db) == []
+    assert original.status == "open"
+    setting.value = ["EL"]
+    db.commit()
+    assert queue_hits(db) == [original]
+
+
+def decide(client, admin, hit, kind):
+    response = client.post(
+        f"/api/v1/hits/{hit.id}/dispositions",
+        headers={"x-csrf-token": admin["csrf_token"]},
+        json={"kind": kind, "note": "Recorded reviewer judgment"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["disposition"]
+
+
+@pytest.mark.parametrize("kind", ["confirmed_match", "escalated"])
+def test_same_hash_human_decision_survives_repeat_then_changed_hash_reopens(
+    seeded, client, admin, kind
+):
+    db, record, _ = seeded
+    run_screening(db)
+    run_screening(db)  # two unresolved observations sharing the same anchor
+    original = queue_hits(db)[0]
+    decide(client, admin, original, kind)
+    db.expire_all()
+    before = db.scalar(select(func.count()).select_from(Disposition))
+    latest = db.scalar(
+        select(Disposition).order_by(Disposition.created_at.desc(), Disposition.id.desc())
+    )
+    assert queue_hits(db) == []
+    repeat = run_screening(db)
+    observation = db.scalar(select(Hit).where(Hit.run_id == repeat.id))
+    assert repeat.hits_new == 0 and observation.status == "open"
+    assert observation.explanation["queue_anchor_hit_id"] == latest.hit_id
+    assert observation.explanation["completed_disposition_id"] == latest.id
+    assert not queue_hit_is_current(db, observation) and queue_hits(db) == []
+    assert db.scalar(select(func.count()).select_from(Disposition)) == before
+    record.city = "Changed City"
+    record.record_hash = party_record_hash(snapshot(record))
+    db.commit()
+    reopened = run_screening(db)
+    assert reopened.hits_new == 1
+    current = queue_hits(db)[0]
+    assert current.explanation["prior_disposition_id"] == latest.id
+    assert queue_hit_is_current(db, current)
+
+
+@pytest.mark.parametrize("kind", ["confirmed_match", "escalated"])
+def test_newer_positive_overrides_old_exact_false_positive_and_new_clear_restores_memory(
+    seeded, client, admin, kind
+):
+    db, record, _ = seeded
+    run_screening(db)
+    x = queue_hits(db)[0]
+    first_clear = decide(client, admin, x, "false_positive")
+    db.expire_all()
+    record.city = "New City"
+    record.record_hash = party_record_hash(snapshot(record))
+    db.commit()
+    run_screening(db)
+    y = queue_hits(db)[0]
+    positive = decide(client, admin, y, kind)
+    db.expire_all()
+    record.city = None  # exact old X hashes; latest human judgment concerned Y
+    record.record_hash = party_record_hash(snapshot(record))
+    db.commit()
+    reopened = run_screening(db)
+    assert reopened.hits_new == 1 and reopened.hits_suppressed == 0
+    current = queue_hits(db)[0]
+    assert current.party_hash == x.party_hash
+    assert current.explanation["prior_disposition_id"] == positive["id"]
+    assert current.explanation["prior_disposition_id"] != first_clear["id"]
+    assert current.explanation["what_changed"]["party"]["city"] == {
+        "before": "New City",
+        "after": None,
+    }
+    # A fresh human false-positive on X supersedes the intervening positive, even
+    # though the existing unique suppression record still points at its first clear.
+    newest_clear = decide(client, admin, current, "false_positive")
+    db.expire_all()
+    repeated = run_screening(db)
+    observation = db.scalar(select(Hit).where(Hit.run_id == repeated.id))
+    assert repeated.hits_suppressed == 1 and repeated.hits_new == 0
+    assert observation.explanation["suppression_disposition_id"] == newest_clear["id"]
+    assert queue_hits(db) == []
+
+
+def test_full_run_explicitly_rescores_prior_delta_candidate_when_blocking_changes(seeded):
+    db, record, _ = seeded
+    record.name = "Nikolay Chugunov"
+    record.party_type = "individual"
+    record.record_hash = party_record_hash(snapshot(record))
+    db.commit()
+    original_listing = listing("Mykola Chuhunov", type="Individual")
+    refresh_csl(db, data=json.dumps([original_listing]).encode())
+    target = db.scalar(select(CSLEntry))
+    first = run_screening(db, entry_ids=[target.id])
+    target_hit = db.scalar(select(Hit).where(Hit.run_id == first.id))
+    assert target_hit is not None and target_hit.bucket != "low"
+    assert target_hit.explanation["blocking_fallback"]
+    refresh_csl(
+        db,
+        data=json.dumps(
+            [
+                original_listing,
+                listing("Nikolay Aster", "two", type="Individual"),
+                listing("Nikolay Brown", "three", type="Individual"),
+                listing("Chugunov Distant", "four", type="Individual"),
+            ]
+        ).encode(),
+    )
+    settings = ScreeningSettings()
+    index = CandidateIndex(list(db.scalars(select(CSLEntry))), settings)
+    candidates, fallback = index.candidates(record)
+    assert not fallback and target.id not in {entry.id for entry in candidates}
+    second = run_screening(db)
+    observation = db.scalar(
+        select(Hit).where(Hit.run_id == second.id, Hit.csl_entry_id == target.id)
+    )
+    assert observation is not None and observation.explanation["prior_pair_forced_candidate"]
+    assert observation.explanation["queue_anchor_hit_id"] == target_hit.id
+    assert target_hit.id in {hit.id for hit in queue_hits(db)}
+    # Changing the score policy genuinely below candidate_min removes the current
+    # item only after the previously observed pair has been explicitly re-scored.
+    db.add(Setting(key="score_weights", value={"country_match": -100}))
+    db.commit()
+    third = run_screening(db)
+    assert (
+        db.scalar(select(Hit).where(Hit.run_id == third.id, Hit.csl_entry_id == target.id)) is None
+    )
+    assert target_hit.id not in {hit.id for hit in queue_hits(db)}
+
+
+def test_failed_old_task_does_not_starve_independent_new_task(seeded, monkeypatch):
+    db, record, refresh = seeded
+    from app.screening import engine
+
+    original_execute = engine._execute
+    old_task = db.scalar(select(ScreeningTask))
+    new_task = ScreeningTask(
+        trigger="party_change", csl_version_id=refresh.version.id, party_ids=[record.id]
+    )
+    db.add(new_task)
+    db.commit()
+
+    def execute(db, **kwargs):
+        if kwargs["trigger"] == "list_change":
+            raise RuntimeError("SECRET: exception must never enter diagnostics")
+        return original_execute(db, **kwargs)
+
+    monkeypatch.setattr(engine, "_execute", execute)
+    with pytest.raises(ScreeningTasksFailedError) as raised:
+        process_pending_tasks(db)
+    assert len(raised.value.completed_runs) == 1
+    assert raised.value.completed_runs[0].hits_new == 1
+    assert raised.value.failures[0]["task_id"] == old_task.id
+    assert "SECRET" not in str(raised.value) and "SECRET" not in str(raised.value.failures)
+    assert old_task.status == "failed" and new_task.status == "complete"
+    assert db.scalar(select(func.count()).select_from(ScreeningRun)) == 1
+    assert len(queue_hits(db)) == 1
+    with pytest.raises(ScreeningTasksFailedError) as retried:
+        process_pending_tasks(db)
+    assert retried.value.completed_runs == []
+    assert old_task.attempts == 2 and new_task.attempts == 1
+    assert db.scalar(select(func.count()).select_from(ScreeningRun)) == 1
+
+
+def test_busy_task_drain_retains_earlier_success_and_pending_task(seeded, monkeypatch):
+    db, record, refresh = seeded
+    from app.screening import engine
+
+    pending = ScreeningTask(
+        trigger="party_change", csl_version_id=refresh.version.id, party_ids=[record.id]
+    )
+    db.add(pending)
+    db.commit()
+    original_begin = engine._begin
+    calls = 0
+
+    def begin(db):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ScreeningBusyError("private details must not enter response")
+        original_begin(db)
+
+    monkeypatch.setattr(engine, "_begin", begin)
+    with pytest.raises(ScreeningTasksFailedError) as raised:
+        process_pending_tasks(db)
+    assert len(raised.value.completed_runs) == 1
+    assert raised.value.failures[0]["task_id"] == pending.id
+    assert "private" not in str(raised.value.failures)
+    assert pending.status == "pending" and pending.attempts == 0
+    assert db.scalar(select(func.count()).select_from(ScreeningRun)) == 1
+    assert len(queue_hits(db)) == 1
+    retry = process_pending_tasks(db)
+    assert len(retry) == 1 and retry[0].hits_new == 0
+    assert pending.status == "complete" and pending.attempts == 1

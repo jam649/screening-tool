@@ -15,12 +15,23 @@
   "sources": {
     "tokens": [
       "frontend/src/styles.css",
-      "frontend/src/csl.css"
+      "frontend/src/csl.css",
+      "frontend/src/sources.css",
+      "frontend/src/admin.css",
+      "frontend/src/review.css"
     ],
     "components": [
       "frontend/src/App.tsx",
       "frontend/src/Overview.tsx",
-      "frontend/src/CSLPanel.tsx"
+      "frontend/src/CSLPanel.tsx",
+      "frontend/src/Sources.tsx",
+      "frontend/src/ReviewQueue.tsx",
+      "frontend/src/Parties.tsx",
+      "frontend/src/Home.tsx",
+      "frontend/src/Audit.tsx",
+      "frontend/src/SettingsControls.tsx",
+      "frontend/src/UsersPanel.tsx",
+      "frontend/src/AcceptInvite.tsx"
     ],
     "assets": [],
     "instructions": [
@@ -112,6 +123,18 @@
     {
       "type": "implementation-authorship",
       "detail": "Claude Opus 5.5 (first-party claude-opus-5-5, high effort, session daed6127-c517-4c72-a3f6-12fbfec7b81f) authored CSL overview, settings panel, status hook, responsive styles and Playwright contract tests through no-tool structured output. Sol integrated the existing App and verified browser state handling."
+    },
+    {
+      "type": "implementation-authorship",
+      "detail": "Claude Opus 5.5 (first-party claude-opus-5-5, medium effort, session a8fe6519-6e0a-443d-94cf-89a8e6f9dd92) authored Sources cards, CSV/XLSX preview/mapping wizard, source API hooks, responsive styles, Overview source state and browser multipart contract tests. Sol integrated routes, corrected a macOS casing collision and verified zero-row snapshots/uncertain outcomes."
+    },
+    {
+      "type": "implementation-authorship",
+      "detail": "Claude Opus 5.5 (first-party claude-opus-5-5, high effort, session 3289afe0-3573-411e-80fe-e9a30ce42542) authored reviewApi.ts, ReviewQueue.tsx, Parties.tsx, Audit.tsx, Home.tsx, review.css, review.spec.ts and parties.spec.ts through approved source-only no-tool structured output. Successful 2339.9-second invocation, four turns including output-clipping recovery, no fallback or permission denials. Sol integrated routes and final API fields, corrected tests and verified browser behavior."
+    },
+    {
+      "type": "implementation-authorship",
+      "detail": "Claude Opus 5.5 (first-party claude-opus-5-5, medium effort, session 22c7f5ae-b10d-4664-88f7-c141e969522d) authored adminApi.ts, SettingsControls.tsx, UsersPanel.tsx, AcceptInvite.tsx, admin.css and admin.spec.ts through approved source-only no-tool structured output. Successful 633-second invocation, no fallback or permission denials. Sol integrated invitation route/session isolation and checked Admin controls and token privacy."
     }
   ],
   "generatedAt": "2026-10-14T00:03:32.076Z"

@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy import select
 
+from app.api.audit import run_summary_payload
 from app.api.deps import DB, AdminUser, CurrentUser
 from app.models import ScreeningRun
 from app.screening.engine import ScreeningBusyError, run_payload, run_screening
@@ -39,7 +40,7 @@ def screen(body: ScreenRequest, db: DB, user: AdminUser):
 @router.get("/runs")
 def runs(db: DB, user: CurrentUser, limit: Annotated[int, Query(ge=1, le=100)] = 20):
     return [
-        run_payload(run)
+        run_summary_payload(run)
         for run in db.scalars(
             select(ScreeningRun)
             .order_by(ScreeningRun.started_at.desc(), ScreeningRun.id.desc())

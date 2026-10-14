@@ -69,3 +69,34 @@ jobs:
         run: docker compose logs --tail 100
       - if: always()
         run: docker compose down
+  compose-csv-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Generate isolated encryption key
+        run: python3 -c 'import base64,secrets; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())' > .env
+      - run: docker compose -p screening-tool-fixture-gates up --build -d --wait
+      - working-directory: frontend
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Screen the real CSV fixture through the browser
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8000
+          SCREENING_TOOL_GATE_CONTAINER: screening-tool-fixture-gates-screening-tool-1
+        run: npm test -- tests/real-csv.spec.ts --workers=1
+      - name: Work the real Reviewer queue and inspect historical evidence
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8000
+          SCREENING_TOOL_REVIEW_GATE: "1"
+          SCREENING_TOOL_GATE_CONTAINER: screening-tool-fixture-gates-screening-tool-1
+        run: npm test -- tests/real-review.spec.ts --workers=1
+      - if: failure()
+        run: docker compose -p screening-tool-fixture-gates logs --tail 100
+      - if: always()
+        run: docker compose -p screening-tool-fixture-gates down --volumes

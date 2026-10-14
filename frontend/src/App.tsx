@@ -1,8 +1,17 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { Overview } from "./Overview";
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Home } from "./Home";
+import { ReviewQueue } from "./ReviewQueue";
+import { Parties, PartyFile } from "./Parties";
+import { Audit } from "./Audit";
 import { CSLPanel } from "./CSLPanel";
+import { Sources } from "./Sources";
+import { SettingsControls } from "./SettingsControls";
+import { UsersPanel } from "./UsersPanel";
+import { AcceptInvite } from "./AcceptInvite";
+import "./admin.css";
+import "./sources.css";
 import "./csl.css";
 import {
   api,
@@ -285,6 +294,8 @@ function Settings({
           </div>
         </dl>
       </section>
+      <SettingsControls session={session} />
+      <UsersPanel session={session} />
       <CSLPanel />
       <section className="panel settings-panel">
         <h2>Using the Consolidated Screening List</h2>
@@ -336,6 +347,12 @@ function Workspace({
           <NavLink to="/" end>
             <span aria-hidden="true">◫</span>Overview
           </NavLink>
+          <NavLink to="/queue"><span aria-hidden="true">≋</span>Review queue</NavLink>
+          <NavLink to="/parties"><span aria-hidden="true">▦</span>Parties</NavLink>
+          <NavLink to="/audit"><span aria-hidden="true">◷</span>Audit</NavLink>
+          <NavLink to="/sources">
+            <span aria-hidden="true">▤</span>Sources
+          </NavLink>
           {session.user.role.toLowerCase() === "admin" && (
             <NavLink to="/settings">
               <span aria-hidden="true">⚙</span>Settings
@@ -375,7 +392,12 @@ function Workspace({
         <main id="main-content" className="page-content">
           <ErrorMessage error={logout.error} />
           <Routes>
-            <Route path="/" element={<Overview session={session} />} />
+            <Route path="/" element={<Home session={session} />} />
+            <Route path="/queue" element={<ReviewQueue />} />
+            <Route path="/parties" element={<Parties />} />
+            <Route path="/parties/:id" element={<PartyFile />} />
+            <Route path="/audit" element={<Audit />} />
+            <Route path="/sources" element={<Sources session={session} />} />
             <Route
               path="/settings"
               element={
@@ -398,18 +420,22 @@ function Workspace({
 }
 
 export function App() {
+  const location = useLocation();
+  const acceptingInvite = location.pathname === "/accept-invite";
   const setup = useQuery({ queryKey: ["setup"], queryFn: setupQuery });
   const session = useQuery({
     queryKey: ["session"],
     queryFn: sessionQuery,
-    enabled: setup.data?.needs_setup === false,
+    enabled: setup.data?.needs_setup === false && !acceptingInvite,
   });
   useEffect(() => {
     if (setup.data) document.title = setup.data.product_name;
   }, [setup.data]);
+  if (acceptingInvite && setup.data && !setup.data.needs_setup)
+    return <AcceptInvite setup={setup.data} />;
   if (
     setup.isPending ||
-    (!setup.data?.needs_setup && session.isPending && !setup.error)
+    (!acceptingInvite && !setup.data?.needs_setup && session.isPending && !setup.error)
   )
     return (
       <Centered>

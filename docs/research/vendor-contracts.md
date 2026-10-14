@@ -1,6 +1,6 @@
 # Vendor contracts verified for screening-tool
 
-Verified 2026-10-13 against primary public documentation and the public CSL download. This is implementation research, not a claim that any credential-dependent integration passed. Jordan explicitly deferred live ERP sandboxes and requested a dummy CSV path first. No secrets were retrieved or printed. Claude CLI metadata reported no authenticated session; research continued directly without repeating authentication probes.
+Verified 2026-10-13 against primary public documentation and the public CSL download. This is implementation research, not a claim that any credential-dependent integration passed. Jordan explicitly deferred live ERP sandboxes and requested a dummy CSV path first. No secrets were retrieved or printed. Subsequent authorized implementation calls verified the signed-in Claude CLI and exact first-party Opus 5.5 model; see the milestone provenance notes.
 
 ## CSL bulk and source metadata
 
@@ -95,14 +95,14 @@ Read `answers.same_party.noul` as a finite number in [0,1], confirm its `type`, 
 
 [Publisher serving source](https://raw.githubusercontent.com/NandhaKishorM/laya/main/laya/serve.py) accepts the same state/questions shape and additional `model`/`max_len` controls. It binds 0.0.0.0:8000 without auth by default; configure local binding or `LAYA_API_KEY`. `LAYA_JEV_STRICT=1` projects responses to the Jev schema. Explicit `model: multilingual` avoids long English inputs selecting the 512-token checkpoint. The source reports caps for body/state/question counts and optional token budgets; use a pinned runtime and test its actual HTTP schema.
 
-The publisher explicitly warns base checkpoints perform near chance on its typed-decisions benchmark and specialization improves results. Those results do not establish screening quality. Keep deterministic safety rails and require fixture/held-out comparison before trusting the default blend. No weights were downloaded and no local inference benchmark was claimed here.
+The publisher explicitly warns base checkpoints perform near chance on its typed-decisions benchmark and specialization improves results. Those results do not establish screening quality. Keep deterministic safety rails and require fixture/held-out comparison before trusting the default blend. This initial contract research did not download weights. The subsequent [local Laya validation](laya-validation.md) ran pinned weights against 120 labeled probes and a stress case. Its screening-quality results support deterministic weighting by default for the unspecialized local checkpoint.
 
 ## Deferred verification
 
 1. Confirm successful ITA sources authentication and response shape with a user-owned subscription key; preserve bulk stamps if unavailable.
 2. QBO sandbox: OAuth refresh rotation, full query pagination/inactive records, CDC caps and tombstones, CloudEvents signatures; production assessment eligibility for the self-hoster.
 3. BC sandbox: exact tenant object permissions, pagination/timestamp boundaries, deletion reconciliation, webhook handshake, ETag renewal and expiry recovery.
-4. Optional Jev key/account check via models listing before any billed inference; local Laya pinned runtime and fixture-quality benchmark.
+4. Optional Jev key/account check via models listing before any billed inference. The local Laya pinned-runtime and fixture-quality benchmark is complete; repeat calibration on representative held-out decisions before enabling a nonzero local-model blend.
 5. Review purge eligibility against transaction-linked retention and holds before enabling automated deletion.
 
 These are remaining external/manual validations, not reasons to block the authorized local CSV implementation. The parent agent records the concrete follow-ups in the shared projects todo.

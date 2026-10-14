@@ -1,4 +1,5 @@
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
@@ -6,7 +7,7 @@ import typer
 
 from app.config import Config
 from app.csl.fetch import CSLDownloadError
-from app.csl.parser import CSLValidationError
+from app.csl.parser import HASH_RULE_VERSION, CSLValidationError
 from app.csl.service import CSLBusyError, configured_api_key, refresh_csl, version_payload
 from app.database import create_database_engine, migrate, session_factory
 from app.screening.engine import (
@@ -15,7 +16,9 @@ from app.screening.engine import (
     run_payload,
     run_screening,
 )
+from app.screening.hash_upgrade import upgrade_hash_rules
 from app.screening.settings import ScreeningValidationError
+from app.security import validate_key_binding
 
 cli = typer.Typer(help="Operate screening-tool from the command line.")
 
@@ -36,6 +39,27 @@ def init():
 
 csl_cli = typer.Typer(help="Manage the official Consolidated Screening List.")
 cli.add_typer(csl_cli, name="csl")
+
+hashes_cli = typer.Typer(help="Explicitly upgrade current matching cache hashes.")
+cli.add_typer(hashes_cli, name="hashes")
+
+
+@hashes_cli.command("upgrade")
+def hashes_upgrade():
+    """Rehash current caches under v2 and enqueue a full screening; preserve history."""
+    config = Config()
+    engine = create_database_engine(config)
+    try:
+        migrate(engine)
+        with session_factory(engine)() as db:
+            validate_key_binding(db, config)
+            result = upgrade_hash_rules(db)
+            typer.echo(json.dumps({"hash_rule_version": HASH_RULE_VERSION, **asdict(result)}))
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        engine.dispose()
 
 
 @csl_cli.command("refresh")

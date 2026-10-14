@@ -17,7 +17,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.audit import audit, redact_credentials
-from app.csl.parser import canonical_hash
+from app.csl.parser import HASH_RULE_VERSION, canonical_hash, csl_entry_hash
 from app.csl.service import current_version
 from app.models import (
     CSLEntry,
@@ -31,12 +31,26 @@ from app.models import (
     utcnow,
 )
 from app.screening.candidates import CandidateIndex
+from app.screening.normalize import party_record_hash
 from app.screening.score import bucket, score_pair
 from app.screening.settings import ScreeningSettings, ScreeningValidationError, load_settings
 
 
 class ScreeningBusyError(RuntimeError):
     pass
+
+
+class ScreeningTasksFailedError(ScreeningValidationError):
+    """Partial progress is committed; diagnostics never contain exception text."""
+
+    def __init__(self, completed_runs: list[ScreeningRun], failures: list[dict[str, Any]]):
+        self.completed_runs = completed_runs
+        self.failures = failures
+        super().__init__(
+            f"{len(failures)} screening task(s) require retry; "
+            f"{len(completed_runs)} independent task(s) completed. "
+            "Unfinished tasks remain available for retry."
+        )
 
 
 @dataclass(frozen=True)
@@ -77,14 +91,17 @@ def _begin(db: Session) -> None:
         raise ScreeningBusyError("The database is busy; retry screening") from exc
 
 
-def queue_hits(db: Session) -> list[Hit]:
+def queue_hits(
+    db: Session, *, party_id: str | None = None, entry_id: str | None = None
+) -> list[Hit]:
     """One current unresolved anchor per pair, using the newest scoring context.
 
     Historical open observations stay available for audit, including superseded
     contexts. A low result in a newer context hides an old queue item without
     inventing a human or system disposition. Removed/deleted/stale hashes never queue.
     """
-    rows = db.scalars(
+    enabled_lists = load_settings(db).enabled_source_lists
+    query = (
         select(Hit)
         .join(ScreeningRun, Hit.run_id == ScreeningRun.id)
         .join(Party, Hit.party_id == Party.id)
@@ -97,18 +114,30 @@ def queue_hits(db: Session) -> list[Hit]:
         )
         .order_by(ScreeningRun.started_at.desc(), Hit.created_at.desc(), Hit.id.desc())
     )
+    if enabled_lists is not None:
+        query = query.where(CSLEntry.source_list.in_(enabled_lists))
+    if party_id is not None:
+        query = query.where(Hit.party_id == party_id)
+    if entry_id is not None:
+        query = query.where(Hit.csl_entry_id == entry_id)
+    rows = db.scalars(query)
     latest: dict[tuple[str, str], Hit] = {}
     for hit in rows:
         key = hit.party_id, hit.csl_entry_id
         latest.setdefault(key, hit)
-    scopes = [
-        (run.id, run.settings_snapshot.get("scope"))
-        for run in db.scalars(
-            select(ScreeningRun)
-            .where(ScreeningRun.finished_at.is_not(None))
-            .order_by(ScreeningRun.started_at.desc(), ScreeningRun.id.desc())
-        )
-    ]
+    if not latest:
+        return []
+    scopes = []
+    for run in db.scalars(
+        select(ScreeningRun)
+        .where(ScreeningRun.finished_at.is_not(None))
+        .order_by(ScreeningRun.started_at.desc(), ScreeningRun.id.desc())
+    ):
+        scope = run.settings_snapshot.get("scope")
+        if scope is not None:
+            party_ids = None if scope["party_ids"] is None else set(scope["party_ids"])
+            entry_ids = None if scope["entry_ids"] is None else set(scope["entry_ids"])
+            scopes.append((run.id, party_ids, entry_ids))
     active = []
     for (party_id, entry_id), observation in latest.items():
         # A later completed scope with no stored hit proves the current pair fell
@@ -116,10 +145,9 @@ def queue_hits(db: Session) -> list[Hit]:
         covering_run = next(
             (
                 run_id
-                for run_id, scope in scopes
-                if scope is not None
-                and (scope["party_ids"] is None or party_id in scope["party_ids"])
-                and (scope["entry_ids"] is None or entry_id in scope["entry_ids"])
+                for run_id, party_ids, entry_ids in scopes
+                if (party_ids is None or party_id in party_ids)
+                and (entry_ids is None or entry_id in entry_ids)
             ),
             None,
         )
@@ -134,6 +162,13 @@ def queue_hits(db: Session) -> list[Hit]:
     return sorted(
         active,
         key=lambda hit: (hit.bucket != "likely", -hit.final_confidence, hit.created_at),
+    )
+
+
+def queue_hit_is_current(db: Session, hit: Hit) -> bool:
+    """Validate one selected pair without materializing the entire book's queue."""
+    return any(
+        row.id == hit.id for row in queue_hits(db, party_id=hit.party_id, entry_id=hit.csl_entry_id)
     )
 
 
@@ -163,6 +198,13 @@ def _execute(
     if settings.enabled_source_lists is not None:
         entries_query = entries_query.where(CSLEntry.source_list.in_(settings.enabled_source_lists))
     entries = list(db.scalars(entries_query))
+    if any(party.record_hash != party_record_hash(snapshot(party)) for party in parties) or any(
+        entry.entry_hash != csl_entry_hash(snapshot(entry)) for entry in entries
+    ):
+        raise ScreeningValidationError(
+            "Cached matching hashes require an explicit upgrade; "
+            "run screening-tool hashes upgrade before screening"
+        )
     if csl_version_id is not None and entry_ids is not None:
         revisions = {
             revision.entry_id: revision.snapshot.get("entry_hash")
@@ -179,7 +221,13 @@ def _execute(
     index = CandidateIndex(entries, settings)
     run_snapshot = {
         **settings.snapshot(),
-        "scope": {"party_ids": party_ids, "entry_ids": entry_ids},
+        "hash_rule_version": HASH_RULE_VERSION,
+        "scope": {
+            "party_ids": [party.id for party in parties],
+            "party_hashes": {party.id: party.record_hash for party in parties},
+            "entry_ids": [entry.id for entry in entries],
+            "entry_hashes": {entry.id: entry.entry_hash for entry in entries},
+        },
     }
     run = ScreeningRun(
         trigger=trigger,
@@ -198,11 +246,9 @@ def _execute(
         )
     )
     anchors: dict[tuple, Hit] = {}
-    historical: dict[tuple[str, str], Hit] = {}
     latest_anchors: set[tuple[str, str]] = set()
     for hit in existing_hits:
         pair = hit.party_id, hit.csl_entry_id
-        historical.setdefault(pair, hit)
         key = (*pair, hit.party_hash, hit.entry_hash, hit.explanation.get("queue_context"))
         if not hit.explanation.get("queue_anchor_hit_id") and pair not in latest_anchors:
             latest_anchors.add(pair)
@@ -216,19 +262,45 @@ def _execute(
     for remembered in sorted(suppressions, key=lambda s: s.created_at, reverse=True):
         prior_suppressions.setdefault((remembered.party_id, remembered.csl_entry_id), remembered)
     dispositions: dict[tuple[str, str], Disposition] = {}
+    human_decisions: dict[tuple[str, str], Disposition] = {}
+    positive_decisions: dict[tuple[str, str], Disposition] = {}
+    false_positive_decisions: dict[tuple[str, str, str, str], Disposition] = {}
+    decision_hits = {hit.id: hit for hit in existing_hits}
     for disposition in db.scalars(
         select(Disposition)
         .join(Hit)
         .where(Hit.party_id.in_(party_set))
-        .order_by(Disposition.created_at.desc())
+        .order_by(Disposition.created_at.desc(), Disposition.id.desc())
     ):
-        disposition_hit = db.get(Hit, disposition.hit_id)
-        assert disposition_hit is not None
-        dispositions.setdefault(
-            (disposition_hit.party_id, disposition_hit.csl_entry_id), disposition
-        )
+        disposition_hit = decision_hits[disposition.hit_id]
+        pair = disposition_hit.party_id, disposition_hit.csl_entry_id
+        dispositions.setdefault(pair, disposition)
+        if disposition.actor_user_id is not None:
+            human_decisions.setdefault(pair, disposition)
+            if disposition.kind in {"confirmed_match", "escalated"}:
+                positive_decisions.setdefault(pair, disposition)
+            elif disposition.kind == "false_positive":
+                exact_pair = (*pair, disposition_hit.party_hash, disposition_hit.entry_hash)
+                false_positive_decisions.setdefault(exact_pair, disposition)
+    scoped_entries = {entry.id: entry for entry in entries}
+    party_hashes = {party.id: party.record_hash for party in parties}
+    forced: dict[str, set[str]] = {}
+    for hit in existing_hits:
+        current_entry = scoped_entries.get(hit.csl_entry_id)
+        if (
+            hit.status == "open"
+            and hit.bucket != "low"
+            and current_entry is not None
+            and hit.party_hash == party_hashes[hit.party_id]
+            and hit.entry_hash == current_entry.entry_hash
+        ):
+            forced.setdefault(hit.party_id, set()).add(hit.csl_entry_id)
     for party in parties:
         candidates, fallback = index.candidates(party)
+        candidate_ids = {entry.id for entry in candidates}
+        candidates.extend(
+            scoped_entries[id] for id in sorted(forced.get(party.id, set()) - candidate_ids)
+        )
         run.parties_screened += 1
         for entry in candidates:
             scored = score_pair(party, entry, settings)
@@ -240,15 +312,46 @@ def _execute(
             exact_key = party.id, entry.id, party.record_hash, entry.entry_hash
             suppression = exact_suppressions.get(exact_key)
             prior = prior_suppressions.get((party.id, entry.id))
-            previous_disposition = dispositions.get((party.id, entry.id))
+            pair = party.id, entry.id
+            previous_human = human_decisions.get(pair)
+            previous_disposition = previous_human or dispositions.get(pair)
+            effective_false_positive = false_positive_decisions.get(exact_key)
+            if suppression and effective_false_positive is None:
+                effective_false_positive = db.get(Disposition, suppression.disposition_id)
+            positive = positive_decisions.get(pair)
+            if (
+                suppression
+                and positive is not None
+                and effective_false_positive is not None
+                and (positive.created_at, positive.id)
+                > (effective_false_positive.created_at, effective_false_positive.id)
+            ):
+                suppression = None
+            completed_decision = None
+            completed_anchor = None
+            if previous_human is not None and previous_human.kind in {
+                "confirmed_match",
+                "escalated",
+            }:
+                decision_hit = decision_hits[previous_human.hit_id]
+                if (decision_hit.party_hash, decision_hit.entry_hash) == (
+                    party.record_hash,
+                    entry.entry_hash,
+                ):
+                    completed_decision, completed_anchor = previous_human, decision_hit
             if suppression:
-                explanation["suppression_disposition_id"] = suppression.disposition_id
+                explanation["suppression_disposition_id"] = (
+                    effective_false_positive.id
+                    if effective_false_positive
+                    else suppression.disposition_id
+                )
+                explanation["suppression_record_id"] = suppression.id
             elif prior or previous_disposition:
-                if prior is not None:
-                    disposition_id = prior.disposition_id
-                else:
-                    assert previous_disposition is not None
+                if previous_disposition is not None:
                     disposition_id = previous_disposition.id
+                else:
+                    assert prior is not None
+                    disposition_id = prior.disposition_id
                 explanation["prior_disposition_id"] = disposition_id
                 prior_decision = db.get(Disposition, disposition_id)
                 assert prior_decision is not None
@@ -265,8 +368,22 @@ def _execute(
                         if before.get(key) != after.get(key)
                     }
                 explanation["what_changed"] = changes
+                prior_run = db.get(ScreeningRun, prior_hit.run_id)
+                assert prior_run is not None
+                prior_rule = prior_run.settings_snapshot.get("hash_rule_version", 1)
+                if prior_rule != HASH_RULE_VERSION:
+                    explanation["hash_rule_change"] = {
+                        "previous": prior_rule,
+                        "current": HASH_RULE_VERSION,
+                        "reason": "Type-aware hash policy invalidated the prior remembered pairing",
+                    }
             result = Adjudication()
-            if adjudicate and not suppression and scored.score >= settings.review_threshold - 10:
+            if (
+                adjudicate
+                and not suppression
+                and not completed_decision
+                and scored.score >= settings.review_threshold - 10
+            ):
                 result = adjudicate(
                     party_snapshot, entry_snapshot, scored.score, deepcopy(explanation), settings
                 )
@@ -278,9 +395,15 @@ def _execute(
             ):
                 raise ScreeningValidationError("Adjudication returned invalid confidence")
             hit_bucket = bucket(confidence, settings, scored.score)
-            anchor = anchors.get((*exact_key, context_hash)) if hit_bucket != "low" else None
+            anchor = completed_anchor or (
+                anchors.get((*exact_key, context_hash)) if hit_bucket != "low" else None
+            )
             if anchor and not suppression:
                 explanation["queue_anchor_hit_id"] = anchor.id
+            if completed_decision is not None:
+                explanation["completed_disposition_id"] = completed_decision.id
+            if entry.id in forced.get(party.id, set()):
+                explanation["prior_pair_forced_candidate"] = True
             hit = Hit(
                 run_id=run.id,
                 party_id=party.id,
@@ -347,16 +470,29 @@ def process_pending_tasks(db: Session) -> list[ScreeningRun]:
     transaction leaves the task pending and no partially committed comparisons.
     Failed tasks retain a sanitized error and are retried on the next invocation.
     """
-    task_ids = list(
-        db.scalars(
-            select(ScreeningTask.id)
+    tasks = list(
+        db.execute(
+            select(ScreeningTask.id, ScreeningTask.attempts)
             .where(ScreeningTask.status.in_(["pending", "failed", "running"]))
             .order_by(ScreeningTask.created_at, ScreeningTask.id)
         )
     )
     runs = []
-    for task_id in task_ids:
-        _begin(db)
+    failures: list[dict[str, Any]] = []
+    for task_id, previous_attempts in tasks:
+        try:
+            _begin(db)
+        except ScreeningBusyError:
+            # Keep pending/running state intact. Earlier independent commits must
+            # remain visible in the aggregate even when another writer takes over.
+            failures.append(
+                {
+                    "task_id": task_id,
+                    "attempts": previous_attempts,
+                    "error": "Screening remains pending while the database is busy",
+                }
+            )
+            break
         task = db.get(ScreeningTask, task_id, populate_existing=True)
         if task is None or task.status == "complete":
             db.rollback()
@@ -408,5 +544,9 @@ def process_pending_tasks(db: Session) -> list[ScreeningRun]:
                 after={"error": task.last_error},
             )
             db.commit()
-            raise
+            failures.append(
+                {"task_id": task.id, "attempts": task.attempts, "error": task.last_error}
+            )
+    if failures:
+        raise ScreeningTasksFailedError(runs, failures)
     return runs

@@ -15,3 +15,5 @@ backend/.venv/bin/python fixtures/generate.py --bulk .workspace/csl-bulk-verifie
 The generator makes no network requests. A different bulk file produces a different dataset: treat that as a new, explicitly reviewed fixture contract, not a routine refresh. The reproducibility test runs locally when the original public bulk file is present; CI always checks fixture hashes, counts, source coverage, diff counts and planted behavior.
 
 For CSV upload, map each header to the same named field. `external_id` is stable in this fixture. Background results may produce additional low/review candidates; the sixty target-pair outcomes are the contract. The visible review queue must stay stable on an unchanged second run; extra per-run comparison history remains in the audit file.
+
+The capture fingerprint in `provenance.json` remains the original hash-rule-v1 semantic fingerprint. The generator recomputes that historical algorithm from the original parsed fields so the frozen files stay byte-identical. Current runtime screening uses normalized, type-aware v2 hashes under the user-approved policy; it does not reinterpret or replace this capture provenance.

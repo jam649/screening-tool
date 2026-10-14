@@ -105,6 +105,8 @@ def test_hit_creation_and_status_changes_preserve_evidence_and_audit(app, hit, a
     with app.state.session_factory() as db:
         db.info["actor_user_id"] = admin["user"]["id"]
         row = db.get(Hit, hit.id)
+        db.add(Disposition(hit_id=row.id, kind="false_positive", actor_user_id=admin["user"]["id"]))
+        db.flush()
         row.status = "dispositioned"
         db.commit()
         changes = db.scalars(select(AuditLog).where(AuditLog.target_id == hit.id)).all()
@@ -118,7 +120,7 @@ def test_hit_creation_and_status_changes_preserve_evidence_and_audit(app, hit, a
             "DELETE FROM hits",
             "INSERT OR REPLACE INTO hits SELECT * FROM hits LIMIT 1",
         ):
-            with pytest.raises(IntegrityError, match="hit evidence is immutable"):
+            with pytest.raises(IntegrityError, match="hit evidence is immutable|new hit requires"):
                 db.execute(text(statement))
             db.rollback()
 
@@ -267,3 +269,115 @@ def test_baseline_downgrade_refuses_to_destroy_audit():
     spec.loader.exec_module(module)
     with pytest.raises(RuntimeError, match="destroy audit evidence"):
         module.downgrade()
+
+
+@pytest.mark.parametrize("status", ["suppressed", "dispositioned"])
+def test_hit_status_cannot_invent_a_decision_orm_or_sql(app, hit, status):
+    with app.state.session_factory() as db:
+        row = db.get(Hit, hit.id)
+        row.status = status
+        with pytest.raises(ImmutableAuditError):
+            db.commit()
+        db.rollback()
+        with pytest.raises(IntegrityError, match="persisted disposition"):
+            db.execute(
+                text("UPDATE hits SET status=:status WHERE id=:id"),
+                {"status": status, "id": hit.id},
+            )
+        db.rollback()
+
+
+def test_closed_hit_cannot_reopen_after_persisted_decision(app, hit, admin):
+    with app.state.session_factory() as db:
+        row = db.get(Hit, hit.id)
+        db.add(
+            Disposition(
+                hit_id=row.id,
+                kind="confirmed_match",
+                actor_user_id=admin["user"]["id"],
+                note="Documented human finding",
+            )
+        )
+        db.flush()
+        row.status = "dispositioned"
+        db.commit()
+        row.status = "open"
+        with pytest.raises(ImmutableAuditError, match="only closes"):
+            db.commit()
+        db.rollback()
+        with pytest.raises(IntegrityError, match="persisted disposition"):
+            db.execute(text("UPDATE hits SET status='open' WHERE id=:id"), {"id": hit.id})
+        db.rollback()
+        assert db.get(Hit, hit.id).status == "dispositioned"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("csl_version_id", "rewritten"),
+        ("settings_snapshot", {"hash_rule_version": 99}),
+        ("trigger", "nightly"),
+        ("parties_screened", 99),
+        ("model_fallbacks", [{"error": "rewritten"}]),
+        ("finished_at", None),
+    ],
+)
+def test_completed_run_provenance_cannot_be_rewritten(app, hit, field, value):
+    from app.models import utcnow
+
+    with app.state.session_factory() as db:
+        run = db.get(ScreeningRun, hit.run_id)
+        run.finished_at = utcnow()
+        db.commit()
+        setattr(run, field, value)
+        with pytest.raises(ImmutableAuditError, match="Completed screening run"):
+            db.commit()
+        db.rollback()
+        sql_value = json.dumps(value) if isinstance(value, (dict, list)) else value
+        with pytest.raises(IntegrityError, match="completed screening run"):
+            db.execute(
+                text(f"UPDATE screening_runs SET {field}=:value WHERE id=:id"),
+                {"value": sql_value, "id": hit.run_id},
+            )
+        db.rollback()
+
+
+def test_zero_hit_run_cannot_be_deleted_or_replaced(app, hit):
+    with app.state.session_factory() as db:
+        run = ScreeningRun(
+            trigger="manual",
+            csl_version_id=hit.entry_snapshot.get("version_id")
+            or db.get(ScreeningRun, hit.run_id).csl_version_id,
+        )
+        db.add(run)
+        db.commit()
+        db.delete(run)
+        with pytest.raises(ImmutableAuditError, match="cannot be deleted"):
+            db.commit()
+        db.rollback()
+        for statement in (
+            "DELETE FROM screening_runs WHERE id=:id",
+            "INSERT OR REPLACE INTO screening_runs SELECT * FROM screening_runs WHERE id=:id",
+        ):
+            with pytest.raises(IntegrityError, match="screening run provenance"):
+                db.execute(text(statement), {"id": run.id})
+            db.rollback()
+
+
+def test_new_run_can_complete_once_when_nullable_finish_attribute_was_unset(app, hit):
+    from app.models import utcnow
+
+    with app.state.session_factory() as db:
+        original = db.get(ScreeningRun, hit.run_id)
+        run = ScreeningRun(trigger="manual", csl_version_id=original.csl_version_id)
+        db.add(run)
+        db.flush()
+        run.parties_screened = 2
+        run.settings_snapshot = {"scope": {"party_ids": [], "entry_ids": []}}
+        run.finished_at = utcnow()
+        db.commit()
+        assert run.finished_at is not None
+        run.parties_screened = 3
+        with pytest.raises(ImmutableAuditError, match="Completed screening run"):
+            db.commit()
+        db.rollback()

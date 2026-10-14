@@ -17,6 +17,7 @@ from app.models.entities import (
     User,
     UserSession,
 )
+from app.models.invitations import UserInvitation
 
 __all__ = [
     "AuditLog",
@@ -36,5 +37,6 @@ __all__ = [
     "Suppression",
     "User",
     "UserSession",
+    "UserInvitation",
     "utcnow",
 ]

@@ -112,7 +112,11 @@ export function useCSL({
       client.setQueryData<CSLStatus>(cslKeys.status, statusFrom(result));
     },
     // Failed attempts are persisted server-side, so reload after either outcome.
-    onSettled: () => client.invalidateQueries({ queryKey: cslKeys.all }),
+    onSettled: () => {
+      for (const family of ["dashboard", "review", "parties", "runs", "audit"])
+        void client.invalidateQueries({ queryKey: [family] });
+      return client.invalidateQueries({ queryKey: cslKeys.all });
+    },
   });
 
   // A fetch started elsewhere may have saved a version once polling sees it finish.

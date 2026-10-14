@@ -5,6 +5,7 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
+from app.csl.parser import canonical_entity_type
 from app.screening.normalize import (
     NormalizedName,
     normalize_country,
@@ -15,12 +16,8 @@ from app.screening.settings import ScreeningSettings
 
 
 def entry_type(entry: Any) -> str | None:
-    value = (entry.entity_type or "").casefold()
-    if value in {"individual", "person"}:
-        return "individual"
-    if value in {"entity", "company", "organization", "organisation"}:
-        return "company"
-    return None
+    kind = canonical_entity_type(entry.entity_type)
+    return kind if kind in {"company", "individual"} else None
 
 
 def names(record: Any, settings: ScreeningSettings, *, party: bool) -> list[NormalizedName]:

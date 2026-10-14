@@ -109,7 +109,9 @@ async function mockApi(page: Page, session: typeof admin, csl: CslHandler) {
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace(/^\/api\/v1/, "");
+    if (path === "/dashboard") return route.fulfill({ json: { total_parties: 0, csl_version: null } });
     if (path === "/setup") return route.fulfill({ json: setup });
+    if (path === "/sources") return route.fulfill({ json: [] });
     if (path === "/auth/me") return route.fulfill({ json: session });
     if (path.startsWith("/csl")) {
       cslRequests.push(`${request.method()} ${path}`);
@@ -185,7 +187,7 @@ test("Admin fetches the first list version from Overview with the CSRF token and
   expect(refreshToken).toBe(admin.csrf_token);
   expect(refreshBody).toBeNull();
   await expect(
-    page.getByText("Coming next", { exact: true }),
+    page.getByRole("link", { name: "Add source", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: /source|customer|vendor/i }),

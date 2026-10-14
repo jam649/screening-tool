@@ -10,7 +10,7 @@ from sqlalchemy import delete, func, or_, select, text
 from app.api.deps import DB, AuthSession, check_origin
 from app.audit import audit
 from app.config import DISCLAIMER, DISCLAIMER_URL, PRODUCT_NAME
-from app.models import LoginAttempt, User, UserSession, utcnow
+from app.models import LoginAttempt, Setting, User, UserSession, utcnow
 from app.security import COOKIE_NAME, PASSWORDS, create_session, login_identifier, verify_password
 
 router = APIRouter()
@@ -89,9 +89,12 @@ def session_response(
 
 @router.get("/setup")
 def setup_status(db: DB):
+    display_name = db.scalar(select(Setting).where(Setting.key == "display_name"))
     return {
         "needs_setup": db.scalar(select(func.count()).select_from(User)) == 0,
-        "product_name": PRODUCT_NAME,
+        "product_name": display_name.value
+        if display_name and not display_name.encrypted
+        else PRODUCT_NAME,
         "disclaimer": DISCLAIMER,
         "disclaimer_url": DISCLAIMER_URL,
     }

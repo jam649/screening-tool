@@ -8,7 +8,7 @@ from typing import Any
 import pycountry
 from text_unidecode import unidecode
 
-from app.csl.parser import canonical_hash
+from app.canonical import canonical_hash
 
 DEFAULT_LEGAL_SUFFIXES = (
     "inc",
@@ -80,12 +80,19 @@ def normalize_name(
 def normalize_country(value: str | None, *, strict: bool = False) -> str | None:
     if not value or not value.strip():
         return None
+
     try:
         return pycountry.countries.lookup(value.strip()).alpha_2
     except LookupError:
         if strict:
             raise ValueError(f"Unrecognized country: {value}") from None
         return None
+
+
+def normalized_text_pair(value: str | None) -> dict[str, str]:
+    """Canonical text retains original-script and ASCII forms and every legal suffix."""
+    name = normalize_name(value or "", legal_suffixes=())
+    return {"unicode": name.unicode, "ascii": name.ascii}
 
 
 def normalize_party_fields(fields: dict[str, Any]) -> dict[str, Any]:
@@ -100,6 +107,7 @@ def normalize_party_fields(fields: dict[str, Any]) -> dict[str, Any]:
         return {"unicode": normalized.unicode, "ascii": normalized.ascii}
 
     return {
+        "party_type": fields.get("party_type", "company").strip().casefold(),
         "name": name(fields["name"]),
         "alt_names": sorted(
             (name(value) for value in fields.get("alt_names", [])),

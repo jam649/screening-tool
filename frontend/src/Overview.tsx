@@ -7,6 +7,7 @@ import {
   StatusError,
 } from "./CSLPanel";
 import { formatCount, isAdminSession, useCSL } from "./csl";
+import { useSources, type Source } from "./sourceApi";
 
 const TOTAL_STEPS = 3;
 
@@ -99,11 +100,108 @@ function ListStep({ csl }: { csl: ReturnType<typeof useCSL> }) {
   );
 }
 
+function latestImport(sources: Source[]): string | null {
+  return sources.reduce<string | null>(
+    (latest, source) =>
+      source.last_synced_at &&
+      (!latest || Date.parse(source.last_synced_at) > Date.parse(latest))
+        ? source.last_synced_at
+        : latest,
+    null,
+  );
+}
+
+function SourceStep({
+  admin,
+  sources,
+}: {
+  admin: boolean;
+  sources: ReturnType<typeof useSources>;
+}) {
+  // Only a successful server import counts; an added but unsynced source does not.
+  const list = sources.isSuccess ? sources.data : null;
+  const imported = list?.filter((source) => source.last_synced_at) ?? [];
+  const done = imported.length > 0;
+  return (
+    <li>
+      <span
+        className={done ? "step-marker done" : "step-marker"}
+        aria-hidden="true"
+      >
+        {done ? "✓" : "3"}
+      </span>
+      <div className="csl-step-body">
+        <h3>
+          {done
+            ? "Your customer and vendor records are imported"
+            : admin
+              ? "Add your customers and vendors"
+              : "Your administrator adds customers and vendors"}
+        </h3>
+        {sources.isPending && <p>Checking your sources…</p>}
+        {sources.isError && (
+          <>
+            <div className="notice danger csl-notice" role="alert">
+              <p>
+                <strong>We couldn’t load your sources.</strong>{" "}
+                {sources.error.message}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => void sources.refetch()}
+              disabled={sources.isFetching}
+            >
+              {sources.isFetching ? "Checking again…" : "Check again"}
+            </button>
+          </>
+        )}
+        {list && done && (
+          <p>
+            {formatCount(imported.length)} of {formatCount(list.length)}{" "}
+            {list.length === 1 ? "source has" : "sources have"} a successful
+            import. Latest import <LocalTime value={latestImport(imported)} />.
+          </p>
+        )}
+        {list && !done && (
+          <p>
+            {admin
+              ? list.length > 0
+                ? "A source is set up, but no file has been imported yet. Upload a CSV or XLSX file to bring in your records."
+                : "Upload a CSV or XLSX file of your customer and vendor records."
+              : "Your administrator imports customer and vendor records. You can view each source’s status."}
+          </p>
+        )}
+        {admin && list && (
+          <Link className="text-link" to="/sources">
+            {done ? "View sources" : "Add source"}
+          </Link>
+        )}
+        {!admin && (
+          <Link className="text-link" to="/sources">
+            Sources
+          </Link>
+        )}
+      </div>
+      {done && <span className="badge success">Imported</span>}
+    </li>
+  );
+}
+
 export function Overview({ session }: { session: Session }) {
   const admin = isAdminSession(session);
   const csl = useCSL({ enabled: admin });
+  const sources = useSources({ enabled: true });
   const { status } = csl;
-  const completed = 1 + (status.data?.current_version ? 1 : 0);
+  const listDone = Boolean(status.data?.current_version);
+  const sourcesDone = Boolean(
+    sources.data?.some((source) => source.last_synced_at),
+  );
+  // Progress needs both reads; either one unknown would make the count false.
+  const known = status.isSuccess && sources.isSuccess;
+  const completed = 1 + (listDone ? 1 : 0) + (sourcesDone ? 1 : 0);
+  const ready = admin && known && listDone && sourcesDone;
   const role = session.user.role.toLowerCase();
   return (
     <>
@@ -117,8 +215,12 @@ export function Overview({ session }: { session: Session }) {
               : "Your administrator prepares the screening data. Here is where your workspace stands."}
           </p>
         </div>
-        <span className="badge">
-          {admin ? "Setup in progress" : "Reviewer access"}
+        <span className={ready ? "badge success" : "badge"}>
+          {admin
+            ? ready
+              ? "Data is ready"
+              : "Setup in progress"
+            : "Reviewer access"}
         </span>
       </header>
       <section
@@ -134,7 +236,7 @@ export function Overview({ session }: { session: Session }) {
           </h2>
           {admin && (
             <div className="setup-progress">
-              {status.isSuccess ? (
+              {known ? (
                 <>
                   <span>
                     {completed} of {TOTAL_STEPS} steps complete
@@ -145,8 +247,11 @@ export function Overview({ session }: { session: Session }) {
                     aria-label="Workspace setup progress"
                   />
                 </>
-              ) : status.isError ? (
-                <span>Progress is unavailable until the list status loads.</span>
+              ) : status.isError || sources.isError ? (
+                <span>
+                  Progress is unavailable until the list and source status
+                  load.
+                </span>
               ) : (
                 <span>Checking setup progress…</span>
               )}
@@ -185,20 +290,7 @@ export function Overview({ session }: { session: Session }) {
               <span className="badge">Admin task</span>
             </li>
           )}
-          <li>
-            <span className="step-marker" aria-hidden="true">
-              3
-            </span>
-            <div className="csl-step-body">
-              <h3>Add your customers and vendors</h3>
-              <p>
-                {admin
-                  ? "Bring your party records together in one place. Source setup is coming next."
-                  : "Your administrator will add customer and vendor sources when source setup is available."}
-              </p>
-            </div>
-            <span className="badge">Coming next</span>
-          </li>
+          <SourceStep admin={admin} sources={sources} />
         </ol>
       </section>
       {admin && status.isSuccess && status.data.pending_screenings > 0 && (

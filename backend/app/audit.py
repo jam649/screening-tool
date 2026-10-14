@@ -3,10 +3,20 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import event, inspect
+from sqlalchemy import event, inspect, select
 from sqlalchemy.orm import Session
 
-from app.models import AuditLog, Disposition, Hit, Party, Setting, Source, Suppression, User
+from app.models import (
+    AuditLog,
+    Disposition,
+    Hit,
+    Party,
+    ScreeningRun,
+    Setting,
+    Source,
+    Suppression,
+    User,
+)
 
 # Values outside this list are private even if callers forget encrypted=True.
 PUBLIC_SETTING_KEYS = frozenset(
@@ -174,19 +184,44 @@ def _snapshot(obj: Any, before: bool = False) -> dict:
 @event.listens_for(Session, "before_flush")
 def protect_and_audit(db: Session, flush_context, instances):
     for obj in db.deleted:
-        if isinstance(obj, (AuditLog, Party, Disposition, Hit)):
+        if isinstance(obj, (AuditLog, Party, Disposition, Hit, ScreeningRun)):
             raise ImmutableAuditError(f"{obj.__tablename__} records cannot be deleted")
     for obj in db.dirty:
         if isinstance(obj, AuditLog) and db.is_modified(obj, include_collections=True):
             raise ImmutableAuditError("Audit log records are insert-only")
         if isinstance(obj, Disposition) and db.is_modified(obj, include_collections=True):
             raise ImmutableAuditError("Disposition records are insert-only")
+        if isinstance(obj, ScreeningRun):
+            state = inspect(obj)
+            history = state.attrs.finished_at.history
+            previously_finished = (
+                history.deleted[0]
+                if history.deleted
+                else db.scalar(select(ScreeningRun.finished_at).where(ScreeningRun.id == obj.id))
+                if history.has_changes()
+                else obj.finished_at
+            )
+            if previously_finished is not None and db.is_modified(obj, include_collections=True):
+                raise ImmutableAuditError("Completed screening run provenance is immutable")
         if isinstance(obj, Hit):
-            for key in inspect(obj).mapper.column_attrs.keys():
+            state = inspect(obj)
+            for key in state.mapper.column_attrs.keys():
                 if key == "status":
                     continue
-                if inspect(obj).attrs[key].history.has_changes():
+                if state.attrs[key].history.has_changes():
                     raise ImmutableAuditError("Historical hit evidence is immutable")
+            history = state.attrs.status.history
+            if history.has_changes():
+                previous = history.deleted[0] if history.deleted else None
+                if previous != "open" or obj.status != "dispositioned":
+                    raise ImmutableAuditError("Hit status only closes an open observation")
+                if not db.scalar(
+                    select(Disposition.id).where(Disposition.hit_id == obj.id).limit(1)
+                ):
+                    raise ImmutableAuditError("Persist a disposition before closing its hit")
+    for obj in db.new:
+        if isinstance(obj, Hit) and obj.status not in {None, "open", "suppressed"}:
+            raise ImmutableAuditError("New hits must be open or have remembered suppression")
     tracked = (User, Source, Setting, Disposition, Party, Suppression, Hit)
     for obj in list(db.new) + list(db.dirty) + list(db.deleted):
         if not isinstance(obj, tracked):

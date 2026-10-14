@@ -75,11 +75,20 @@ def test_parser_published_shape_raw_hash_and_urls():
     assert entry.raw == raw
     assert entry.entry_hash == canonical_hash(
         {
-            "name": entry.name,
-            "alt_names": entry.alt_names,
-            "addresses": entry.addresses,
-            "countries": entry.countries,
-            "programs": entry.programs,
+            "name": {"unicode": "example manufacturing 0", "ascii": "example manufacturing 0"},
+            "alt_names": [{"unicode": "example 0", "ascii": "example 0"}],
+            "addresses": [
+                {
+                    "address": {"unicode": "1 main street", "ascii": "1 main street"},
+                    "city": {"unicode": "boston", "ascii": "boston"},
+                    "state": {"unicode": "", "ascii": ""},
+                    "postal_code": {"unicode": "", "ascii": ""},
+                    "country": "US",
+                }
+            ],
+            "countries": ["US"],
+            "programs": [{"unicode": "export restriction", "ascii": "export restriction"}],
+            "entity_type": "company",
         }
     )
     changed_stamp = parse_bulk(envelope([raw], timestamp="2026-10-13T06:00:00Z"))
@@ -96,6 +105,80 @@ def test_parser_published_shape_raw_hash_and_urls():
     raw["addresses"] = {}
     with pytest.raises(CSLValidationError):
         parse_bulk(envelope([raw]))
+
+
+def test_type_hash_semantics_and_type_only_delta(client):
+    raw = listing()
+    original = parse_bulk(envelope([raw])).entries[0]
+    alias = parse_bulk(envelope([raw | {"type": " Company "}])).entries[0]
+    changed = parse_bulk(envelope([raw | {"type": " Individual "}])).entries[0]
+    assert alias.entry_hash == original.entry_hash
+    assert changed.entry_hash != original.entry_hash
+    assert changed.raw["type"] == " Individual "
+    with client.app.state.session_factory() as db:
+        first = refresh_csl(db, data=envelope([raw]))
+        second = refresh_csl(db, data=envelope([raw | {"type": "Individual"}]))
+        assert first.version.id != second.version.id
+        assert (second.version.added, second.version.changed, second.version.removed) == (0, 1, 0)
+        assert second.pending_task_id is not None
+
+
+def test_normalized_csl_hash_stable_for_formatting_and_unordered_fields():
+    raw = listing() | {
+        "name": "Ａｃｍｅ, Manufacturing Ltd.",
+        "alt_names": ["Acme EXPORTS", "Second Alias"],
+        "addresses": [
+            {
+                "address": "１ Main Street.",
+                "city": "Boston",
+                "state": "MA",
+                "country": "United States",
+            },
+            {"address": "2 Second Street", "city": "Toronto", "country": "CAN"},
+        ],
+        "countries": ["CA", "US"],
+        "programs": ["EXPORT Control", "Sanctions Alpha"],
+    }
+    formatted = raw | {
+        "name": "acme manufacturing ltd",
+        "alt_names": ["SECOND ALIAS", "acme exports", "acme exports"],
+        "addresses": [
+            {"address": "2 Second-Street", "city": "TORONTO", "country": "Canada"},
+            {"address": "1 MAIN STREET", "city": "boston", "state": "ma", "country": "US"},
+        ],
+        "countries": ["United States", "Canada", "US"],
+        "programs": ["SANCTIONS ALPHA", "export control", "export control"],
+        "type": " Company ",
+    }
+    original = parse_bulk(envelope([raw])).entries[0]
+    changed_format = parse_bulk(envelope([formatted])).entries[0]
+    assert original.entry_hash == changed_format.entry_hash
+    assert original.raw != changed_format.raw
+    assert original.name == raw["name"]  # original evidence remains original
+    assert original.entity_type == "entity" and changed_format.entity_type == "company"
+    for update in (
+        {"name": "Acme Manufacturing LLC"},
+        {"addresses": [{"address": "99 Main Street", "city": "Boston", "country": "US"}]},
+        {"programs": ["Different Restriction"]},
+        {"type": "Individual"},
+        {"countries": ["Atlantis"]},
+    ):
+        assert parse_bulk(envelope([raw | update])).entries[0].entry_hash != original.entry_hash
+
+
+def test_csl_hash_retains_unicode_and_ascii_forms():
+    from app.csl.parser import csl_entry_hash
+    from app.screening.normalize import normalized_text_pair
+
+    name = normalized_text_pair("Société Ácme Ltd.")
+    assert name == {"unicode": "société ácme ltd", "ascii": "societe acme ltd"}
+    first = parse_bulk(envelope([listing() | {"name": "Société Ácme Ltd."}])).entries[0]
+    second = parse_bulk(envelope([listing() | {"name": "SOCIÉTÉ ÁCME LTD"}])).entries[0]
+    assert first.entry_hash == second.entry_hash
+    # Accent/script changes are conservatively distinct despite an ASCII scoring match.
+    ascii_name = parse_bulk(envelope([listing() | {"name": "Societe Acme Ltd"}])).entries[0]
+    assert ascii_name.entry_hash != first.entry_hash
+    assert csl_entry_hash(first.fields()) == first.entry_hash
 
 
 @pytest.mark.parametrize(
@@ -233,7 +316,9 @@ def test_metadata_revision_preserves_raw_without_rescreen(client, app):
 def test_rejected_and_failed_fetch_leave_active_list(client, app, monkeypatch):
     with app.state.session_factory() as db:
         first = refresh_csl(db, data=envelope([listing(i) for i in range(25)]))
-        for payload in [b"bad JSON", envelope([listing(i) for i in range(3)])]:
+        incomplete = json.loads(envelope([listing(i) for i in range(3)]))
+        incomplete["total"] = 25
+        for payload in [b"bad JSON", json.dumps(incomplete).encode()]:
             with pytest.raises(CSLValidationError):
                 refresh_csl(db, data=payload)
         assert count(db, CSLVersion) == 1 and count(db, CSLEntry) == 25

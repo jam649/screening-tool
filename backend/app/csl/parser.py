@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+from app.canonical import HASH_RULE_VERSION, canonical_hash  # noqa: F401 -- public compatibility
+from app.screening.normalize import normalize_country, normalize_text, normalized_text_pair
+
 BULK_URL = "https://data.trade.gov/downloadable_consolidated_screening_list/v1/consolidated.json"
 SOURCES_URL = "https://data.trade.gov/consolidated_screening_list/v1/sources"
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
@@ -37,11 +40,54 @@ class CSLValidationError(ValueError):
     """No database changes may be made for a rejected download."""
 
 
-def canonical_hash(value: Any) -> str:
-    data = json.dumps(
-        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+def canonical_entity_type(value: str | None) -> str | None:
+    """The hash and type penalty share semantic aliases; retain raw type separately."""
+    kind = normalize_text(value) if value else None
+    if kind in {"individual", "person"}:
+        return "individual"
+    if kind in {"entity", "company", "organization", "organisation"}:
+        return "company"
+    return kind
+
+
+def csl_entry_hash(fields: dict[str, Any]) -> str:
+    def country(value: str | None) -> str:
+        return normalize_country(value) or normalize_text(value)
+
+    def unique_sorted(values: list[Any]) -> list[Any]:
+        return [
+            value
+            for _, value in sorted(
+                {
+                    json.dumps(value, ensure_ascii=False, sort_keys=True): value for value in values
+                }.items()
+            )
+        ]
+
+    addresses = [
+        {
+            **{
+                key: normalized_text_pair(address.get(key))
+                for key in ("address", "city", "state", "postal_code")
+            },
+            "country": country(address.get("country")),
+        }
+        for address in fields.get("addresses") or []
+    ]
+    return canonical_hash(
+        {
+            "name": normalized_text_pair(fields.get("name")),
+            "alt_names": unique_sorted(
+                [normalized_text_pair(name) for name in fields.get("alt_names") or []]
+            ),
+            "addresses": unique_sorted(addresses),
+            "countries": sorted({country(value) for value in fields.get("countries") or []}),
+            "programs": unique_sorted(
+                [normalized_text_pair(program) for program in fields.get("programs") or []]
+            ),
+            "entity_type": canonical_entity_type(fields.get("entity_type")),
+        }
     )
-    return hashlib.sha256(data.encode()).hexdigest()
 
 
 def safe_url(value: Any) -> str | None:
@@ -164,7 +210,7 @@ def _entry(row: Any) -> ParsedEntry:
         source_list_url=safe_url(row.get("source_list_url"))
         or safe_url(row.get("source_information_url")),
         raw=row,
-        entry_hash=canonical_hash(fields),
+        entry_hash=csl_entry_hash(fields | {"entity_type": entity_type}),
     )
 
 

@@ -2,10 +2,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.staticfiles import StaticFiles
 
 from app import audit  # noqa: F401 -- registers ORM audit guards
-from app.api import auth, csl, dashboard, screening, sources
+from app.api import audit as audit_api
+from app.api import auth, csl, dashboard, parties, review, screening, settings, sources, users
 from app.config import PRODUCT_NAME, Config
 from app.database import create_database_engine, migrate, session_factory
 from app.security import ConfiguredTrustedHostMiddleware, validate_key_binding
@@ -36,6 +39,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     application.include_router(csl.router, prefix="/api/v1")
     application.include_router(screening.router, prefix="/api/v1")
     application.include_router(sources.router, prefix="/api/v1")
+    for router in (review.router, parties.router, users.router, settings.router, audit_api.router):
+        application.include_router(router, prefix="/api/v1")
 
     @application.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -52,7 +57,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         return response
 
     @application.get("/api/v1/health")
-    def health():
+    def health(request: Request):
+        try:
+            with request.app.state.engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            raise HTTPException(503, "Database unavailable") from None
         return {"status": "ok"}
 
     @application.get("/{path:path}")

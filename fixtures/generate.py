@@ -19,7 +19,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.csl.parser import BULK_URL, parse_bulk  # noqa: E402
+from app.csl.parser import BULK_URL, ParsedCSL, canonical_hash, parse_bulk  # noqa: E402
+
+def original_semantic_fingerprint(parsed: ParsedCSL) -> str:
+    """Reproduce the frozen capture's v1 provenance, independent of current hash policy.
+
+    This historical fingerprint uses the original raw-field matching hash. Runtime
+    screening uses normalized, type-aware v2 hashes; the frozen government bytes,
+    expected outcomes and capture metadata must not be rewritten to follow it.
+    """
+    records = []
+    for entry in parsed.entries:
+        fields = entry.fields()
+        fields["entry_hash"] = canonical_hash(
+            {key: fields[key] for key in ("name", "alt_names", "addresses", "countries", "programs")}
+        )
+        records.append(fields)
+    return canonical_hash(records)
+
 
 SEED = 20261013
 COUNTRIES = [
@@ -322,7 +339,7 @@ def generate(bulk, destination):
             {
                 "source_url": BULK_URL,
                 "bulk_sha256": hashlib.sha256(data).hexdigest(),
-                "semantic_sha256": parsed.semantic_sha256,
+                "semantic_sha256": original_semantic_fingerprint(parsed),
                 "seed": SEED,
                 "sample_entries": 300,
                 "background_parties": 2000,
