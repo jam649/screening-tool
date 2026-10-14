@@ -37,9 +37,10 @@ from app.models import (
     utcnow,
 )
 from app.models.evidence import RunPartyEvidence
+from app.screening.bounds import NameBounds
 from app.screening.candidates import CandidateIndex
 from app.screening.normalize import party_record_hash
-from app.screening.score import bucket, score_pair
+from app.screening.score import below_minimum, bucket, party_features, score_pair
 from app.screening.settings import ScreeningSettings, ScreeningValidationError, load_settings
 from app.screening.writer import copy_tree, paused_gc
 
@@ -560,9 +561,13 @@ def _prepare(
         )
     }
     index = CandidateIndex(entries, settings)
+    index.prefetch_fallbacks(parties)
     # One immutable prepared snapshot per entry; actual persisted Hit snapshots
     # and inference inputs are still copied independently before use.
     entry_snapshots = {entry.id: snapshot(entry) for entry in entries}
+    # Normalized comparison inputs live only for this snapshot; each entry's
+    # are derived on first use, exactly when score_pair would first need them.
+    name_bounds = NameBounds(settings, index.names)
     pairs: dict[str, list[PreparedPair]] = {}
     candidate_counts = {}
     for party in parties:
@@ -573,11 +578,39 @@ def _prepare(
         )
         candidate_counts[party.id] = len(candidates)
         pairs[party.id] = []
-        for entry in candidates:
-            scored = score_pair(party, entry, settings, explanation_minimum=settings.candidate_min)
+        if not candidates:
+            continue
+        party_side = party_features(party, settings)
+        listings = [name_bounds.listing(entry) for entry in candidates]
+        bounds = name_bounds.party(party_side, listings)
+        # A proven ceiling below candidate_min means a full score would discard
+        # the pair too. A coarse ceiling per listing is tried first, then the
+        # tighter per-key one; every remaining pair is scored exactly.
+        features = [listing.features for listing in listings]
+        coarse = below_minimum(party_side, features, bounds.ceilings(), settings)
+        remaining = [position for position, excluded in enumerate(coarse) if not excluded]
+        refined = below_minimum(
+            party_side,
+            [features[position] for position in remaining],
+            [bounds.refined_ceiling(position) for position in remaining],
+            settings,
+        )
+        for position, excluded in zip(remaining, refined, strict=True):
+            if excluded:
+                continue
+            entry = candidates[position]
+            scored = score_pair(
+                party,
+                entry,
+                settings,
+                explanation_minimum=settings.candidate_min,
+                features=(party_side, features[position]),
+                name_bound=bounds.comparisons(position),
+            )
             if scored.score < settings.candidate_min:
                 continue
-            explanation = deepcopy(scored.explanation)
+            # score_pair builds fresh containers for each retained explanation.
+            explanation = scored.explanation
             explanation.update(
                 {
                     "blocking_fallback": fallback,
