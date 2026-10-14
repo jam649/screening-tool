@@ -5,14 +5,17 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from app.api.deps import DB, AdminUser, CurrentUser
+from app.api.review import begin_write
+from app.api.users import validate_admin
 from app.audit import audit
 from app.connectors.csv import UploadValidationError, preview_upload
+from app.connectors.qbo_common import source_environment
 from app.connectors.sync import sync_csv
 from app.models import Source, utcnow
 from app.notifications.service import dispatch_outbox
@@ -22,6 +25,7 @@ from app.scheduler.leases import (
     operation_session,
     protected_operation,
 )
+from app.scheduler.service import dispatch_attempt, enqueue_source_poll
 from app.screening.engine import ScreeningTasksFailedError, process_pending_tasks
 
 router = APIRouter(prefix="/sources", tags=["sources"])
@@ -29,8 +33,10 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 class SourceCreate(BaseModel):
-    kind: Literal["csv"] = "csv"
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["csv", "qbo"] = "csv"
     label: str = Field(min_length=1, max_length=200)
+    environment: Literal["sandbox", "production"] | None = None
 
     @field_validator("label")
     @classmethod
@@ -40,10 +46,17 @@ class SourceCreate(BaseModel):
         return value.strip()
 
 
-def source_payload(source: Source) -> dict[str, Any]:
+class SyncBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["incremental", "full"] = "incremental"
+
+
+def source_payload(source: Source, runtime=None) -> dict[str, Any]:
     next_sync = None
-    if source.kind != "csv" and source.last_synced_at:
-        next_sync = source.last_synced_at + timedelta(minutes=15)
+    if source.kind != "csv" and runtime is not None:
+        job = runtime.scheduler.get_job("source-" + source.id)
+        if job is not None:
+            next_sync = job.next_run_time
     health = "not_synced"
     if source.last_error:
         health = "error"
@@ -59,6 +72,10 @@ def source_payload(source: Source) -> dict[str, Any]:
         "health": health,
         "last_error": source.last_error,
         "column_mapping": source.config.get("column_mapping", {}),
+        "environment": source_environment(source) if source.kind == "qbo" else None,
+        "connection_status": source.config.get("connection_status")
+        if source.kind in {"qbo", "bc"}
+        else None,
     }
 
 
@@ -82,13 +99,31 @@ def upload_bytes(file: UploadFile) -> tuple[bytes, str]:
 
 
 @router.get("")
-def sources(db: DB, user: CurrentUser):
-    return [source_payload(row) for row in db.scalars(select(Source).order_by(Source.label))]
+def sources(request: Request, db: DB, user: CurrentUser):
+    runtime = request.app.state.scheduler
+    return [
+        source_payload(row, runtime) for row in db.scalars(select(Source).order_by(Source.label))
+    ]
 
 
 @router.post("", status_code=201)
 def create_source(body: SourceCreate, db: DB, user: AdminUser):
-    source = Source(kind=body.kind, label=body.label, config={})
+    actor_id = user.id
+    begin_write(db)
+    validate_admin(db, actor_id)
+    if (body.kind == "qbo" and body.environment is None) or (
+        body.kind == "csv" and body.environment is not None
+    ):
+        raise HTTPException(422, "Choose an environment for QuickBooks sources only")
+    values = {}
+    if body.kind == "qbo":
+        values = {
+            "environment": body.environment,
+            "connection_status": "configured",
+            "connection_generation": 0,
+            "webhooks_enabled": False,
+        }
+    source = Source(kind=body.kind, label=body.label, config=values)
     db.add(source)
     db.commit()
     return source_payload(source)
@@ -127,18 +162,54 @@ def preview(
 
 
 @router.get("/{source_id}")
-def source_detail(source_id: str, db: DB, user: CurrentUser):
-    return source_payload(get_source(db, source_id))
+def source_detail(source_id: str, request: Request, db: DB, user: CurrentUser):
+    return source_payload(get_source(db, source_id), request.app.state.scheduler)
 
 
 @router.patch("/{source_id}")
-def rename_source(source_id: str, body: SourceCreate, db: DB, user: AdminUser):
+def rename_source(source_id: str, body: SourceCreate, request: Request, db: DB, user: AdminUser):
+    actor_id = user.id
+    begin_write(db)
+    validate_admin(db, actor_id)
     source = get_source(db, source_id)
     if source.kind != body.kind:
         raise HTTPException(422, "A source's connector kind cannot be changed")
+    if body.environment is not None and (
+        source.kind != "qbo" or source_environment(source) != body.environment
+    ):
+        raise HTTPException(422, "A source's environment cannot be changed")
     source.label = body.label
     db.commit()
-    return source_payload(source)
+    return source_payload(source, request.app.state.scheduler)
+
+
+@router.post("/{source_id}/sync", status_code=202)
+def sync_source(
+    source_id: str,
+    body: SyncBody,
+    request: Request,
+    background: BackgroundTasks,
+    db: DB,
+    user: AdminUser,
+):
+    actor_id = user.id
+    begin_write(db)
+    validate_admin(db, actor_id)
+    source = get_source(db, source_id)
+    if source.kind not in {"qbo", "bc"}:
+        raise HTTPException(422, "Use a file upload to sync a CSV source")
+    if source.config.get("connection_status") != "connected" or not source.credentials_enc:
+        raise HTTPException(409, "Connect this source before requesting a sync")
+    attempt = enqueue_source_poll(db, source.id, mode=body.mode, actor_user_id=actor_id)
+    db.commit()
+    result = {"attempt_id": attempt.id, "operation": "source_sync", "status": "queued"}
+    background.add_task(
+        dispatch_attempt, request.app.state.session_factory, request.app.state.config, attempt.id
+    )
+    runtime = request.app.state.scheduler
+    if runtime:
+        runtime.wake()
+    return result
 
 
 @router.post("/{source_id}/upload")

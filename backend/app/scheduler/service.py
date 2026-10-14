@@ -15,6 +15,7 @@ from app.scheduler.leases import (
     operation_session,
     protected_operation,
     request_attempt,
+    validate_parameters,
 )
 
 OPERATIONS = {
@@ -23,12 +24,91 @@ OPERATIONS = {
     "screen_party",
     "screen_changed",
     "source_sync",
+    "source_disconnect",
     "monitor_cycle",
     "morning_report",
     "alert_dispatch",
     "retention_apply",
 }
 SOURCE_HANDLERS: dict = {}
+DISCONNECT_HANDLERS: dict = {}
+
+
+def register_default_connectors():
+    from app.connectors.qbo import sync_qbo_source
+    from app.connectors.qbo_auth import disconnect_source
+
+    # Retain explicit test/operator registrations; production uses fixed vendors.
+    SOURCE_HANDLERS.setdefault("qbo", sync_qbo_source)
+    DISCONNECT_HANDLERS.setdefault("qbo", disconnect_source)
+
+
+def pollable_sources(db):
+    # Initial configuration, lost grants and local disconnects cannot be polled.
+    return [
+        source
+        for source in db.scalars(select(Source).where(Source.kind.in_(["qbo", "bc"])))
+        if source.config.get("connection_status") == "connected" and source.credentials_enc
+    ]
+
+
+def _enqueue_source(db, source_id, operation, *, mode=None, actor_user_id=None):
+    source = db.get(Source, source_id, populate_existing=True)
+    if source is None or source.kind not in {"qbo", "bc"}:
+        raise ValueError("Choose an API source")
+    if actor_user_id:
+        actor = db.get(User, actor_user_id, populate_existing=True)
+        if actor is None or not actor.active or actor.role != "admin":
+            raise OperationAuthorityError("Active Admin role required")
+    parameters = {"defer_if_busy": True}
+    if mode is not None:
+        parameters["mode"] = mode
+    validate_parameters(operation, parameters)
+    # One queued equivalent poll is enough. Running work can never absorb a
+    # later receipt because it may already have copied its remote watermark.
+    for existing in db.scalars(
+        select(OperationAttempt)
+        .where(
+            OperationAttempt.operation == operation,
+            OperationAttempt.source_id == source_id,
+            OperationAttempt.status == "queued",
+            OperationAttempt.actor_user_id == actor_user_id,
+        )
+        .order_by(OperationAttempt.created_at)
+    ):
+        if existing.parameters == parameters:
+            return existing
+    row = OperationAttempt(
+        operation=operation,
+        source_id=source_id,
+        actor_user_id=actor_user_id,
+        parameters=parameters,
+    )
+    db.add(row)
+    db.flush()
+    audit(
+        db,
+        "monitoring.requested",
+        "operation_attempts",
+        row.id,
+        after={"operation": operation, "source_id": source_id, "mode": mode},
+    )
+    return row
+
+
+def enqueue_source_poll(db, source_id, *, mode="incremental", actor_user_id=None):
+    """Enqueue inside the caller's receipt/token writer; never commit it separately."""
+    return _enqueue_source(
+        db,
+        source_id,
+        "source_sync",
+        mode=mode,
+        actor_user_id=actor_user_id,
+    )
+
+
+def enqueue_source_disconnect(db, source_id, *, actor_user_id):
+    return _enqueue_source(db, source_id, "source_disconnect", actor_user_id=actor_user_id)
 
 
 def register_source_handler(kind, handler):
@@ -54,7 +134,9 @@ def enqueue_operation(
     with factory() as db:
         if operation == "screen_party" and (not party_id or db.get(Party, party_id) is None):
             failure = "party_not_found"
-        elif operation == "source_sync" and (not source_id or db.get(Source, source_id) is None):
+        elif operation in {"source_sync", "source_disconnect"} and (
+            not source_id or db.get(Source, source_id) is None
+        ):
             failure = "source_not_found"
     if failure:
         from sqlalchemy import text
@@ -104,6 +186,7 @@ def _screen_pending(factory, config, actor_user_id=None):
 
 def _execute(factory, config, attempt, execution):
     operation, parameters = attempt.operation, attempt.parameters
+    validate_parameters(operation, parameters)
     actor = attempt.actor_user_id
     if operation in {"screen_all", "screen_party", "screen_changed"}:
         from app.screening.engine import (
@@ -170,7 +253,14 @@ def _execute(factory, config, attempt, execution):
             handler = SOURCE_HANDLERS.get(source.kind)
             if handler is None:
                 raise ValueError("This connector does not support scheduled sync yet")
-            result = handler(db, config, source)
+            options = {}
+            if "mode" in parameters:
+                options["mode"] = parameters["mode"]
+            loader = db.info.get("qbo_transport_loader")
+            transport = loader() if loader else None
+            if source.kind == "qbo" and transport is not None:
+                options["transport"] = transport
+            result = handler(db, config, source, **options)
             safe = {
                 key: value
                 for key, value in result.items()
@@ -192,6 +282,27 @@ def _execute(factory, config, attempt, execution):
         if screening["status"] == "failed":
             raise RuntimeError("Pending screening failed after source application")
         return outcome
+    if operation == "source_disconnect":
+        with operation_session(factory, execution, actor) as db:
+            source = db.get(Source, attempt.source_id)
+            if source is None:
+                raise ValueError("Source not found")
+            handler = DISCONNECT_HANDLERS.get(source.kind)
+            if handler is None:
+                raise ValueError("This connector does not support disconnect")
+            loader = db.info.get("qbo_transport_loader")
+            transport = loader() if loader else None
+            options = {"transport": transport} if transport is not None else {}
+            result = handler(db, config, source, **options)
+            outcome = {
+                key: result[key]
+                for key in ("source_id", "connection_status", "revocation_status", "error_code")
+                if key in result
+            }
+        execution.complete(outcome)
+        if outcome.get("revocation_status") == "failed":
+            raise RuntimeError("Provider revocation failed; polling has stopped locally")
+        return outcome
     if operation == "monitor_cycle":
         outcomes = []
         if parameters.get("refresh", True):
@@ -205,7 +316,7 @@ def _execute(factory, config, attempt, execution):
                 )
             )
         with factory() as db:
-            source_ids = list(db.scalars(select(Source.id).where(Source.kind.in_(["qbo", "bc"]))))
+            source_ids = [source.id for source in pollable_sources(db)]
         outcomes.extend(
             run_operation(factory, config, "source_sync", source_id=sid, actor_user_id=actor)
             for sid in source_ids
@@ -230,23 +341,28 @@ def _execute(factory, config, attempt, execution):
             batch = enqueue_morning_report(db, config)
             batch_id = batch.id
             db.commit()
-        return {
-            "batch_id": batch_id,
-            "delivery": dispatch_outbox(factory, config, batch_id=batch_id, force=True),
-        }
+        delivery = dispatch_outbox(factory, config, batch_id=batch_id, force=True)
+        outcome = {"batch_id": batch_id, "delivery": delivery}
+        execution.complete(outcome)
+        if delivery.get("error_code"):
+            raise RuntimeError("Notification dispatcher failed after report enqueue")
+        return outcome
     if operation == "alert_dispatch":
         from app.notifications.service import dispatch_outbox
 
-        return {
-            "delivery": dispatch_outbox(
-                factory,
-                config,
-                batch_id=parameters.get("batch_id"),
-                retry_uncertain=parameters.get("force_retry", False),
-                force=bool(parameters.get("batch_id")),
-                execution=execution,
-            )
-        }
+        delivery = dispatch_outbox(
+            factory,
+            config,
+            batch_id=parameters.get("batch_id"),
+            retry_uncertain=parameters.get("force_retry", False),
+            force=bool(parameters.get("batch_id")),
+            execution=execution,
+        )
+        outcome = {"delivery": delivery}
+        execution.complete(outcome)
+        if delivery.get("error_code"):
+            raise RuntimeError("Notification dispatcher failed")
+        return outcome
     if operation == "retention_apply":
         from app.retention.service import apply_retention
 
@@ -279,6 +395,12 @@ def dispatch_attempt(factory, config, attempt_id):
     with factory() as db:
         row = db.get(OperationAttempt, attempt_id)
         payload = attempt_payload(row)
+    if attempt.operation in {"source_sync", "source_disconnect"}:
+        from app.scheduler.runtime import current_runtime
+
+        runtime = current_runtime()
+        if runtime is not None and runtime.factory is factory:
+            runtime.reconcile()
     # Delivery happens only after screening/import/refresh transactions and leases end.
     if attempt.operation in {
         "screen_all",

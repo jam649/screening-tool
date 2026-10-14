@@ -8,10 +8,10 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 
-from app.models import Setting, Source, User, utcnow
+from app.models import Setting, User, utcnow
 from app.notifications.settings import public_settings
 from app.scheduler.jobstore import JSONJobStore
-from app.scheduler.service import dispatch_pending, run_operation
+from app.scheduler.service import dispatch_pending, pollable_sources, run_operation
 
 _RUNTIME = None
 MONITORING_DEFAULTS = {
@@ -68,7 +68,7 @@ class SchedulerRuntime:
         with self.factory() as db:
             values = monitoring_settings(db, self.config)
             notifications = public_settings(db)
-            sources = list(db.scalars(select(Source.id).where(Source.kind.in_(["qbo", "bc"]))))
+            sources = [source.id for source in pollable_sources(db)]
         timezone = ZoneInfo(values["timezone"])
         definitions = {}
         for job_id, operation, when, day in [

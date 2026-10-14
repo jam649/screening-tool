@@ -2,7 +2,7 @@
 
 Self-hosted customer and vendor screening against the U.S. Consolidated Screening List (CSL). Python/FastAPI/SQLite and React, in one container. MIT licensed.
 
-**Implementation is underway.** The secure setup wizard, CSL pipeline, CSV/XLSX import, deterministic matching, keyboard review, party history, users, persistent monitoring, SMTP reports, PDF/CSV/ZIP exports and bounded retention have passed the real Docker and browser gates through milestone 5. ERP adapters, optional models and release hardening are being completed in order, as tracked in [the implementation plan](docs/plans/implementation.md). Live QuickBooks and Business Central sandbox validation is deferred by the project owner; fixture checks do not establish production integration readiness.
+**Implementation is underway.** The secure setup wizard, CSL pipeline, CSV/XLSX import, deterministic matching, keyboard review, party history, users, persistent monitoring, SMTP reports, PDF/CSV/ZIP exports and bounded retention have passed the real Docker and browser gates through milestone 5. QuickBooks OAuth, full/CDC sync, signed webhooks and revocation have passed the packaged fixture, browser and restart gates in milestone 6. Business Central, optional models and release hardening are being completed in order, as tracked in [the implementation plan](docs/plans/implementation.md). Live QuickBooks and Business Central sandbox validation is deferred by the project owner; fixture checks do not establish production integration readiness.
 
 ## Start locally
 
@@ -24,6 +24,26 @@ Keep `.env` private and back up its key with the data volume. The key encrypts c
 Set `SCREENING_TOOL_ALLOWED_HOSTS` to a JSON array of your public hostnames and `SCREENING_TOOL_ALLOWED_ORIGINS` to the exact HTTPS origins (also JSON). The default only accepts localhost/loopback hosts.
 
 A production deployment should forward `X-Forwarded-Proto` through a trusted TLS proxy and restrict direct access to the internal HTTP port. Run only one API worker because the scheduler is inside the process. Do not expose the initial wizard until you are ready to create the Admin.
+
+## QuickBooks Online
+
+Live Intuit sandbox validation is deferred; the connector is tested against synthetic responses derived from [official contracts](docs/research/vendor-contracts.md#quickbooks-online) and the real packaged application. Use your own Intuit developer app and validate it in a sandbox before production. Production credentials require Intuit's App Assessment; marketplace listing is a separate process.
+
+1. Set the application's public base URL in **Settings → Email notifications**. Use public HTTPS for a remotely accessible deployment. Loopback HTTP is supported for a local OAuth callback.
+2. Open **Settings → QuickBooks app settings**, choose Sandbox or Production, and save that environment's client ID and secret. Register the exact displayed redirect URI in Intuit. Saved credentials are encrypted and displayed as configured flags.
+3. In **Sources**, add a QuickBooks source for each company, choose the same environment, and authorize it through Intuit while signed in as the initiating Admin. An app's configured keys and a company's authorized connection are separate states. Each source keeps its historical company identity after disconnect.
+4. Connected sources poll customers and vendors on the monitoring schedule. **Sync changes** reads CDC; **Full sync** reconciles the whole book, including inactive records. Operations remain queued while a source is busy; their eventual counts and screening result appear after completion.
+5. Webhooks are optional. Configure the environment's verifier token and displayed webhook URL in Intuit, then enable notifications on the source. This requires a connected company and a public HTTPS base URL. Signed notifications request an earlier poll; scheduled polling remains enabled.
+
+Disconnect stops polling and preserves parties, reviews and history. Its status reports whether the remote grant was revoked, failed, or did not require revocation. A failed revoke retains encrypted retry material and exposes **Retry Intuit revocation**. Reconnect is required when refresh authorization expires or is withdrawn.
+
+For an operator full reconciliation:
+
+```bash
+docker compose exec screening-tool screening-tool sync SOURCE_UUID --full
+```
+
+The [milestone 6 evidence record](docs/milestones/6.md) distinguishes synthetic contract checks, actual application checks and pending live sandbox checks. HTTP access logs are disabled; configure your reverse proxy to omit OAuth query strings as well. Callback responses use `Referrer-Policy: no-referrer`.
 
 ## Development checks
 

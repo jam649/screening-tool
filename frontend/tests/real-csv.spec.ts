@@ -43,7 +43,7 @@ test("real Docker CSV gate creates Admin, imports 2060 parties, and preserves on
   expect(sample.headers()["content-type"]).toContain("text/csv");
   const csv = await sample.body();
   expect(csv.length).toBeGreaterThan(0);
-  await page.getByLabel("Source name").fill("Synthetic 2060-party gate");
+  await page.getByRole("region", { name: "Add a CSV source", exact: true }).getByLabel("Source name").fill("Synthetic 2060-party gate");
   await page.getByRole("button", { name: "Add CSV source" }).click();
   const wizard = page.getByRole("region", { name: "Upload a file to Synthetic 2060-party gate" });
   const file = { name: "screening-tool-demo-parties.csv", mimeType: "text/csv", buffer: csv };

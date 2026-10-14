@@ -7,7 +7,9 @@ import {
   type ReactNode,
 } from "react";
 import { ApiError, type Session } from "./api";
+import { useSearchParams } from "react-router-dom";
 import { LocalTime } from "./CSLPanel";
+import { AddQboSource, QboSourceControls } from "./QboSourceControls";
 import { formatCount, isAdminSession } from "./csl";
 import {
   DEMO_CSV_URL,
@@ -49,7 +51,7 @@ function errorText(error: unknown) {
     : "Something went wrong. Please try again.";
 }
 
-function HealthBadge({ health }: { health: SourceHealth }) {
+function HealthBadge({ health, kind }: { health: SourceHealth; kind: string }) {
   return (
     <span
       className={`badge ${healthTones[health] ?? ""}`}
@@ -59,16 +61,18 @@ function HealthBadge({ health }: { health: SourceHealth }) {
           : undefined
       }
     >
-      {healthLabels[health] ?? health}
+      {health === "not_synced" && kind !== "csv" ? "Not yet synced" : healthLabels[health] ?? health}
     </span>
   );
 }
 
 function SourceCard({
   source,
+  session,
   onUpload,
 }: {
   source: Source;
+  session?: Session;
   onUpload?: () => void;
 }) {
   const titleId = useId();
@@ -77,11 +81,11 @@ function SourceCard({
       <div className="source-card-head">
         <div>
           <span className="source-kind">
-            {source.kind === "csv" ? "CSV / XLSX upload" : source.kind}
+            {source.kind === "csv" ? "CSV / XLSX upload" : source.kind === "qbo" ? "QuickBooks Online" : source.kind}
           </span>
           <h3 id={titleId}>{source.label}</h3>
         </div>
-        <HealthBadge health={source.health} />
+        <HealthBadge health={source.health} kind={source.kind} />
       </div>
       <dl className="source-facts">
         <div>
@@ -89,7 +93,7 @@ function SourceCard({
           <dd>{formatCount(source.record_count)}</dd>
         </div>
         <div>
-          <dt>Last import</dt>
+          <dt>{source.kind === "csv" ? "Last import" : "Last sync"}</dt>
           <dd>
             {source.last_synced_at ? (
               <LocalTime value={source.last_synced_at} />
@@ -110,6 +114,15 @@ function SourceCard({
             )}
           </dd>
         </div>
+        {source.kind === "qbo" && source.environment && (
+          <div><dt>Environment</dt><dd className="capitalize">{source.environment}</dd></div>
+        )}
+        {source.kind === "qbo" && source.connection_status && (
+          <div>
+            <dt>Company connection</dt>
+            <dd>{({ configured: "Not connected", connected: "Connected", reconnect_required: "Reconnect required", disconnecting: "Disconnecting", disconnected: "Disconnected" })[source.connection_status]}</dd>
+          </div>
+        )}
       </dl>
       {source.last_error && (
         <div className="notice danger">
@@ -118,6 +131,7 @@ function SourceCard({
           </p>
         </div>
       )}
+      {source.kind === "qbo" && session && <QboSourceControls session={session} source={source} />}
       {onUpload && (
         <button type="button" className="button secondary" onClick={onUpload}>
           Upload CSV or XLSX
@@ -130,9 +144,11 @@ function SourceCard({
 function SourceList({
   sources,
   admin,
+  session,
   onUpload,
 }: {
   sources: ReturnType<typeof useSources>;
+  session: Session;
   admin: boolean;
   onUpload?: (source: Source) => void;
 }) {
@@ -179,7 +195,7 @@ function SourceList({
           <p>
             <strong>No sources yet.</strong>{" "}
             {admin
-              ? "Add a CSV source below to bring in your customer and vendor records."
+              ? "Add a CSV or QuickBooks source below to bring in your customer and vendor records."
               : "Your administrator hasn’t added any customer or vendor sources."}
           </p>
         </div>
@@ -189,6 +205,7 @@ function SourceList({
             <li key={source.id}>
               <SourceCard
                 source={source}
+                session={session}
                 onUpload={
                   onUpload && source.kind === "csv"
                     ? () => onUpload(source)
@@ -867,6 +884,29 @@ function UploadWizard({
   );
 }
 
+const qboCallbackErrors: Record<string, string> = {
+  invalid_oauth_state: "The authorization link is no longer valid. Start a new connection request.",
+  oauth_configuration_changed: "The app or source configuration changed during authorization. Start again with the current settings.",
+  authorization_declined: "QuickBooks authorization was declined. You can connect again when ready.",
+  invalid_oauth_response: "QuickBooks authorization could not be verified. Start a new connection request.",
+  company_binding_mismatch: "This source belongs to a different QuickBooks company. Reconnect its original company, or add a new source for the new company.",
+  company_already_connected: "This QuickBooks company already has a source in this environment. Use that source instead.",
+  admin_session_required: "An active Admin session is required. Sign in and start authorization again.",
+  authorization_cancelled: "QuickBooks authorization was cancelled. Start a new connection request when ready.",
+  source_busy: "This source is busy. Wait for its operation to finish, then start authorization again.",
+  revocation_cleanup_pending: "An earlier QuickBooks authorization is still being cleaned up. Wait for cleanup to finish, or retry failed revocation on the source card before reconnecting.",
+  oauth_failed: "QuickBooks authorization could not be completed. Check the connection state below before trying again.",
+};
+
+function QboCallbackNotice() {
+  const [params] = useSearchParams();
+  const error = params.get("connection_error");
+  if (error) return <div className="notice danger" role="alert">{Object.hasOwn(qboCallbackErrors, error) ? qboCallbackErrors[error] : qboCallbackErrors.oauth_failed}</div>;
+  if (params.get("connection") === "connected")
+    return <p className="notice" role="status">QuickBooks authorization returned. Check the current company connection state below.</p>;
+  return null;
+}
+
 export function Sources({ session }: { session: Session }) {
   const admin = isAdminSession(session);
   const listId = useId();
@@ -885,12 +925,13 @@ export function Sources({ session }: { session: Session }) {
           <h1>Sources</h1>
           <p className="lede">
             {admin
-              ? "Bring in your customer and vendor records. Each upload replaces a source’s records with a complete snapshot."
+              ? "Bring in your customer and vendor records. Each CSV upload replaces that source’s records with a complete snapshot."
               : "The customer and vendor sources your administrator maintains, with their latest import status."}
           </p>
         </div>
         {!admin && <span className="badge">Read-only</span>}
       </header>
+      {admin && <QboCallbackNotice />}
       {active ? (
         <UploadWizard
           key={active.id}
@@ -906,10 +947,12 @@ export function Sources({ session }: { session: Session }) {
             <SourceList
               sources={sources}
               admin={admin}
+              session={session}
               onUpload={admin ? setUploading : undefined}
             />
           </section>
           {admin && <AddSourceForm onCreated={setUploading} />}
+          {admin && <AddQboSource session={session} />}
           {admin && <SampleDownload />}
         </>
       )}

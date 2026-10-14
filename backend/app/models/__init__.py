@@ -25,6 +25,7 @@ from app.models.monitoring import (
     OperationAttempt,
     OperationLease,
 )
+from app.models.oauth import OAuthState
 from app.models.retention import (
     RetentionAttestation,
     RetentionHold,
@@ -46,6 +47,7 @@ __all__ = [
     "NotificationDelivery",
     "OperationAttempt",
     "OperationLease",
+    "OAuthState",
     "Party",
     "RetentionAttestation",
     "RetentionHold",

@@ -1,0 +1,9 @@
+# Test server only: the production Compose service does not mount or enable this.
+# Use a fresh named Compose project; never reset a user's application data.
+services:
+  screening-tool:
+    command: ["python", "/tmp/milestone6.py", "--serve-fixture"]
+    environment:
+      SCREENING_TOOL_DATABASE_URL: sqlite:////data/milestone6-fixture.db
+    volumes:
+      - ./scripts/gates/milestone6.py:/tmp/milestone6.py:ro

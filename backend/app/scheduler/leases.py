@@ -39,7 +39,13 @@ class OperationLeaseLostError(RuntimeError):
 def lease_key(operation: str, source_id=None):
     if operation in {"screen_all", "screen_party", "screen_changed"}:
         return "screening"
-    if operation in {"source_sync", "source_import"}:
+    if operation in {
+        "source_sync",
+        "source_import",
+        "source_disconnect",
+        "qbo_oauth_start",
+        "qbo_oauth_callback",
+    }:
         if not source_id:
             raise ValueError("Choose a source")
         return f"source-sync:{source_id}"
@@ -97,13 +103,37 @@ def attempt_payload(row: OperationAttempt):
     }
 
 
+def validate_parameters(operation, parameters):
+    # Durable commands contain only fixed, nonsecret execution options.
+    if set(parameters) - {
+        "csl_file",
+        "refresh",
+        "batch_id",
+        "recipient",
+        "force_retry",
+        "mode",
+        "defer_if_busy",
+    }:
+        raise ValueError("Unsupported operation parameters")
+    if "mode" in parameters and (
+        operation != "source_sync"
+        or not isinstance(parameters["mode"], str)
+        or parameters["mode"] not in {"incremental", "full"}
+    ):
+        raise ValueError("Choose incremental or full sync")
+    if "defer_if_busy" in parameters and (
+        operation not in {"source_sync", "source_disconnect"}
+        or type(parameters["defer_if_busy"]) is not bool
+    ):
+        raise ValueError("Unsupported overlap behavior")
+
+
 def request_attempt(
     factory, operation, *, source_id=None, party_id=None, parameters=None, actor_user_id=None
 ):
     # Only fixed command options belong here. Never allow credential/body payloads.
     parameters = parameters or {}
-    if set(parameters) - {"csl_file", "refresh", "batch_id", "recipient", "force_retry"}:
-        raise ValueError("Unsupported operation parameters")
+    validate_parameters(operation, parameters)
     with factory() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         if actor_user_id:
@@ -221,15 +251,22 @@ def protected_operation(
             db.info["actor_user_id"] = attempt.actor_user_id
             row = db.scalar(select(OperationLease).where(OperationLease.key == key))
             if row and row.owner_id and _owner_alive(row):
-                attempt.status, attempt.error_code = "skipped", "operation_already_running"
-                attempt.finished_at = utcnow()
-                audit(
-                    db,
-                    "monitoring.overlap_skipped",
-                    "operation_attempts",
-                    attempt.id,
-                    after={"operation": operation, "resource": key},
-                )
+                deferred = attempt.parameters.get("defer_if_busy") is True
+                # Receipts and their follow-up polls commit together. A live source
+                # owner must not discard that later poll merely because it overlaps.
+                if not deferred:
+                    attempt.status = "skipped"
+                    attempt.finished_at = utcnow()
+                first_overlap = attempt.error_code != "operation_already_running"
+                attempt.error_code = "operation_already_running"
+                if first_overlap:
+                    audit(
+                        db,
+                        "monitoring.overlap_deferred" if deferred else "monitoring.overlap_skipped",
+                        "operation_attempts",
+                        attempt.id,
+                        after={"operation": operation, "resource": key},
+                    )
                 db.commit()
                 raise OperationBusyError("This operation is already running")
             if row is None:
@@ -243,18 +280,47 @@ def protected_operation(
                     if lease_key(previous.operation, previous.source_id) == key:
                         previous.status, previous.error_code = "interrupted", "owner_stopped"
                         previous.finished_at = utcnow()
+                        # A competing new claim can precede the recovery job.
+                        # Preserve the interrupted request's exact durable intent;
+                        # an incoming incremental poll cannot replace a lost full poll.
+                        from app.scheduler.service import OPERATIONS
+
+                        replacement = None
+                        if previous.operation in OPERATIONS:
+                            replacement = OperationAttempt(
+                                operation=previous.operation,
+                                source_id=previous.source_id,
+                                party_id=previous.party_id,
+                                actor_user_id=previous.actor_user_id,
+                                parameters=dict(previous.parameters),
+                            )
+                            db.add(replacement)
+                            db.flush()
+                            audit(
+                                db,
+                                "monitoring.recovery_queued",
+                                "operation_attempts",
+                                replacement.id,
+                                after={
+                                    "previous_attempt_id": previous.id,
+                                    "operation": previous.operation,
+                                },
+                            )
                         audit(
                             db,
                             "monitoring.interrupted",
                             "operation_attempts",
                             previous.id,
-                            after={"error_code": "owner_stopped"},
+                            after={
+                                "error_code": "owner_stopped",
+                                "retry_attempt_id": replacement.id if replacement else None,
+                            },
                         )
             row.owner_id, row.owner_pid = owner_id, os.getpid()
             row.fence += 1
             row.heartbeat_at = utcnow()
             row.expires_at = row.heartbeat_at + timedelta(seconds=LEASE_SECONDS)
-            attempt.status, attempt.started_at = "running", utcnow()
+            attempt.status, attempt.started_at, attempt.error_code = "running", utcnow(), None
             audit(
                 db,
                 "monitoring.started",

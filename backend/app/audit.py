@@ -12,6 +12,7 @@ from app.models import (
     Hit,
     NotificationBatch,
     NotificationDelivery,
+    OAuthState,
     OperationAttempt,
     Party,
     RetentionAttestation,
@@ -208,6 +209,7 @@ def protect_and_audit(db: Session, flush_context, instances):
         RetentionHold,
         RetentionHoldRelease,
         RetentionPurgeCertificate,
+        OAuthState,
     )
     for obj in db.deleted:
         if isinstance(obj, permanent):
@@ -219,6 +221,18 @@ def protect_and_audit(db: Session, flush_context, instances):
                 f"{obj.__tablename__} deletion requires exact retention eligibility"
             )
     frozen_inputs = {
+        OAuthState: {
+            "id",
+            "created_at",
+            "state_hash",
+            "source_id",
+            "user_id",
+            "session_id",
+            "app_generation",
+            "source_generation",
+            "redirect_uri",
+            "expires_at",
+        },
         NotificationBatch: {
             "id",
             "created_at",
@@ -242,6 +256,16 @@ def protect_and_audit(db: Session, flush_context, instances):
         },
     }
     for obj in db.dirty:
+        if isinstance(obj, OAuthState):
+            consumed = inspect(obj).attrs.consumed_at.history
+            if consumed.has_changes():
+                previous = (
+                    consumed.deleted[0]
+                    if consumed.deleted
+                    else db.scalar(select(OAuthState.consumed_at).where(OAuthState.id == obj.id))
+                )
+                if previous is not None or obj.consumed_at is None:
+                    raise ImmutableAuditError("OAuth state can only be consumed once")
         if isinstance(
             obj,
             (RetentionAttestation, RetentionHold, RetentionHoldRelease, RetentionPurgeCertificate),

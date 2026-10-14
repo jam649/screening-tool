@@ -1,5 +1,6 @@
 """Validated atomic party ingestion shared by CSV and future ERP adapters."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,6 +47,7 @@ def apply_sync(
     batch: SyncBatch,
     *,
     mapping: dict[str, str | list[str]] | None = None,
+    before_apply: Callable[[Session, Source], None] | None = None,
 ) -> SyncResult:
     source_id = source.id
     if source_id is None:
@@ -78,6 +80,8 @@ def apply_sync(
         raise UploadValidationError("Duplicate party identifiers are not accepted")
     db.execute(text("BEGIN IMMEDIATE"))
     try:
+        if before_apply is not None:
+            before_apply(db, source)
         existing = {
             party.external_id: party
             for party in db.scalars(select(Party).where(Party.source_id == source_id))

@@ -13,7 +13,7 @@ from app.csl.service import version_payload
 from app.database import create_database_engine, migrate, session_factory
 from app.models import CSLVersion, ScreeningRun
 from app.retention.service import purge_plan
-from app.scheduler.service import run_operation
+from app.scheduler.service import register_default_connectors, run_operation
 from app.screening.engine import (
     run_payload,
 )
@@ -69,6 +69,7 @@ def operator_database():
     try:
         migrate(engine)
         factory = session_factory(engine, config)
+        register_default_connectors()
         with factory() as db:
             validate_key_binding(db, config)
         yield config, factory
@@ -121,10 +122,21 @@ def screen(
 
 
 @cli.command("sync")
-def sync(source: Annotated[str, typer.Argument(help="API source UUID.")]):
+def sync(
+    source: Annotated[str, typer.Argument(help="API source UUID.")],
+    full: Annotated[
+        bool, typer.Option("--full", help="Reconcile the complete company book.")
+    ] = False,
+):
     """Poll an API source; use Sources in the browser for a CSV full snapshot."""
     with operator_database() as (config, factory):
-        result = run_operation(factory, config, "source_sync", source_id=source)
+        result = run_operation(
+            factory,
+            config,
+            "source_sync",
+            source_id=source,
+            parameters={"mode": "full"} if full else None,
+        )
         require_success(result)
         typer.echo(json.dumps(result, default=str))
 
@@ -145,7 +157,12 @@ def print_operation(operation, **kwargs):
         require_success(result)
         typer.echo(json.dumps(result, default=str))
         delivery = result.get("outcome", {}).get("delivery", {})
-        if delivery.get("failed") or delivery.get("uncertain") or delivery.get("busy"):
+        if (
+            delivery.get("failed")
+            or delivery.get("uncertain")
+            or delivery.get("busy")
+            or delivery.get("error_code")
+        ):
             raise typer.Exit(1)
 
 

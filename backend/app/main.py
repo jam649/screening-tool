@@ -17,6 +17,7 @@ from app.api import (
     monitoring,
     notifications,
     parties,
+    qbo,
     retention,
     review,
     screening,
@@ -25,8 +26,11 @@ from app.api import (
     users,
 )
 from app.config import PRODUCT_NAME, Config
+from app.connectors.qbo_common import CALLBACK_PATH
 from app.database import create_database_engine, migrate, session_factory
+from app.oauth_privacy import OAuthCallbackPrivacyMiddleware
 from app.scheduler.runtime import start_scheduler
+from app.scheduler.service import register_default_connectors
 from app.security import ConfiguredTrustedHostMiddleware, validate_key_binding
 
 
@@ -39,6 +43,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         application.state.config = settings
         application.state.engine = engine
         application.state.session_factory = session_factory(engine, settings)
+        # Fixture transports are opt-in process state, never persisted configuration.
+        application.state.session_factory.kw["info"]["qbo_transport_loader"] = lambda: getattr(
+            application.state, "qbo_transport", None
+        )
+        register_default_connectors()
         scheduler = None
         try:
             with application.state.session_factory() as db:
@@ -60,6 +69,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     application.include_router(csl.router, prefix="/api/v1")
     application.include_router(screening.router, prefix="/api/v1")
     application.include_router(sources.router, prefix="/api/v1")
+    application.include_router(qbo.router, prefix="/api/v1")
     application.include_router(monitoring.router, prefix="/api/v1")
     application.include_router(notifications.router, prefix="/api/v1")
     application.include_router(exports.router, prefix="/api/v1")
@@ -91,7 +101,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["Referrer-Policy"] = (
+            "no-referrer" if request.scope.get("path") == CALLBACK_PATH else "same-origin"
+        )
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
@@ -123,6 +135,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise HTTPException(503, "Build the frontend before serving this page")
         return FileResponse(root / "index.html", headers={"Cache-Control": "no-cache"})
 
+    application.add_middleware(OAuthCallbackPrivacyMiddleware)
     return application
 
 

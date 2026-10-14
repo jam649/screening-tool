@@ -7,6 +7,7 @@ import { Parties, PartyFile } from "./Parties";
 import { Audit } from "./Audit";
 import { CSLPanel } from "./CSLPanel";
 import { Sources } from "./Sources";
+import { QboSettings } from "./QboSettings";
 import { NotificationSettings, NotificationsBanner } from "./NotificationSettings";
 import { MonitoringPanel, MonitoringSummary } from "./MonitoringPanel";
 import { AutoClearControls } from "./AutoClearControls";
@@ -302,6 +303,7 @@ function Settings({
       <AutoClearControls session={session} />
       <MonitoringPanel session={session} />
       <NotificationSettings session={session} />
+      <QboSettings session={session} />
       <RetentionControls session={session} />
       <UsersPanel session={session} />
       <CSLPanel />

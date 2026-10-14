@@ -237,7 +237,7 @@ test("an Admin adds a CSV source with JSON and CSRF, then previews the file as r
     page.getByRole("heading", { name: "Sources", level: 1 }),
   ).toBeVisible();
   await expect(page.getByText("No sources yet.")).toBeVisible();
-  await page.getByLabel("Source name").fill("  Customer ledger ");
+  await page.getByRole("region", { name: "Add a CSV source", exact: true }).getByLabel("Source name").fill("  Customer ledger ");
   await page.getByRole("button", { name: "Add CSV source" }).click();
 
   const wizard = wizardFor(page, "Customer ledger");

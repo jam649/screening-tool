@@ -15,6 +15,7 @@ from app.scheduler.leases import (
 )
 from app.scheduler.runtime import SchedulerRuntime
 from app.scheduler.service import dispatch_attempt, enqueue_operation, run_operation
+from app.security import encrypt_json
 
 
 def test_overlap_shared_resource_and_sanitized_attempts(client, admin):
@@ -92,7 +93,16 @@ def test_schedules_persist_json_next_time_timezone_and_source_slots(client, admi
         db.scalar(select(Setting).where(Setting.key == "timezone")).value = "America/New_York"
         db.add_all(
             [
-                Source(kind="qbo", label="Fixture API"),
+                Source(
+                    kind="qbo",
+                    label="Fixture API",
+                    config={
+                        "connection_status": "connected",
+                        "environment": "sandbox",
+                        "realm_id": "12345",
+                    },
+                    credentials_enc=encrypt_json({"synthetic": True}, config),
+                ),
                 Source(kind="csv", label="Fixture CSV"),
             ]
         )

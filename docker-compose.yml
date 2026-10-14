@@ -7,6 +7,8 @@ services:
       SCREENING_TOOL_SECRET_KEY: ${SCREENING_TOOL_SECRET_KEY:?Generate a Fernet key in .env first; see README}
       SCREENING_TOOL_DATABASE_URL: sqlite:////data/screening.db
       SCREENING_TOOL_FRONTEND_DIST: /app/frontend/dist
+      SCREENING_TOOL_ALLOWED_HOSTS: '${SCREENING_TOOL_ALLOWED_HOSTS:-["localhost","127.0.0.1","::1"]}'
+      SCREENING_TOOL_ALLOWED_ORIGINS: '${SCREENING_TOOL_ALLOWED_ORIGINS:-[]}'
       TZ: ${TZ:-UTC}
     volumes:
       - screening-data:/data

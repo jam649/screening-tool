@@ -15,6 +15,8 @@ export type Source = {
   health: SourceHealth;
   last_error: string | null;
   column_mapping: ColumnMapping;
+  environment?: "sandbox" | "production" | null;
+  connection_status?: "configured" | "connected" | "reconnect_required" | "disconnecting" | "disconnected" | null;
 };
 
 export type SourcePreview = {

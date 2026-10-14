@@ -1,0 +1,1 @@
+{"CDCResponse":[{"QueryResponse":[{"Customer":[{"Id":"1","Active":false,"DisplayName":"José Ácme"}],"startPosition":1,"maxResults":1},{"Vendor":[{"Id":"7","status":"Deleted","domain":"QBO","MetaData":{"LastUpdatedTime":"2026-10-14T02:00:00Z"}}],"startPosition":1,"maxResults":1,"totalCount":2}]}],"time":"2026-10-14T02:00:01Z"}
