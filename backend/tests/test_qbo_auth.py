@@ -858,3 +858,65 @@ def test_never_connected_disconnect_is_truthfully_not_required(client, admin, qb
         and result["connection_status"] == "disconnected"
     )
     assert not calls
+
+
+@pytest.mark.parametrize("revoke_status", [200, 503])
+def test_reconnect_replaces_prior_grant_revocation_flags(client, admin, qbo_setup, revoke_status):
+    from app.connectors.qbo_common import REVOKE_URL, TOKEN_URL
+    from app.scheduler.service import dispatch_attempt
+
+    source_id, _ = qbo_setup
+    factory, config = client.app.state.session_factory, client.app.state.config
+    fresh_token = {
+        **TOKEN,
+        "access_token": "synthetic-reconnected-access-token",
+        "refresh_token": "synthetic-reconnected-refresh-token",
+    }
+    exchanged = 0
+    revoked = []
+
+    def vendor(request):
+        nonlocal exchanged
+        with factory() as db:
+            db.execute(text("BEGIN IMMEDIATE"))
+            db.rollback()
+        if str(request.url) == REVOKE_URL:
+            revoked.append(json.loads(request.content)["token"])
+            return httpx.Response(revoke_status, json={})
+        assert str(request.url) == TOKEN_URL
+        exchanged += 1
+        return httpx.Response(200, json=TOKEN if exchanged == 1 else fresh_token)
+
+    client.app.state.qbo_transport = httpx.MockTransport(vendor)
+    _, initial_state = start(client, admin, source_id)
+    initial = callback(client, initial_state)
+    assert initial.status_code == 303 and "connection=connected" in initial.headers["location"]
+    disconnect = write(client, admin, "post", f"/sources/{source_id}/qbo/disconnect", {})
+    assert disconnect.status_code == 202
+    result = dispatch_attempt(factory, config, disconnect.json()["attempt_id"])
+    prior_status = "revoked" if revoke_status == 200 else "failed"
+    assert result["status"] == ("success" if revoke_status == 200 else "failed")
+    previous = client.get(f"/api/v1/sources/{source_id}/qbo/connection").json()
+    assert previous["status"] == "disconnected" and previous["revocation_status"] == prior_status
+    assert revoked == [TOKEN["refresh_token"]]
+
+    _, new_state = start(client, admin, source_id)
+    accepted = callback(client, new_state)
+    assert accepted.status_code == 303 and "connection=connected" in accepted.headers["location"]
+    current = client.get(f"/api/v1/sources/{source_id}/qbo/connection").json()
+    assert current["status"] == "connected" and current["realm_id"] == "12345"
+    assert current["revocation_status"] is None and current["revocation_error_code"] is None
+    with factory() as db:
+        source = db.get(Source, source_id)
+        assert "disconnect_requested_at" not in source.config
+        credentials = load_source_credentials(source, config)
+        assert credentials["access_token"] == fresh_token["access_token"]
+        assert credentials["refresh_token"] == fresh_token["refresh_token"]
+        assert not credentials.get("pending_revocations")
+        history = db.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "qbo.disconnected", AuditLog.target_id == source_id
+            )
+        )
+        assert history.after["revocation_status"] == prior_status
+    assert exchanged == 2

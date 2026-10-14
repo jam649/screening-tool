@@ -238,12 +238,22 @@ def _accept_callback(
         values["client_id"] = app.client_id
         cancelled_at = source.config.get("disconnect_requested_at")
         cancelled = bool(cancelled_at and datetime.fromisoformat(cancelled_at) >= started_at)
-        source.config = {
+        connection_config = {
             **source.config,
             "realm_id": realm_id,
             "connection_generation": generation + 1,
             "connection_status": "disconnecting" if cancelled else "connected",
         }
+        if not cancelled:
+            # These describe the previous grant; its immutable audit retains
+            # the outcome while the newly accepted grant starts connected.
+            for key in (
+                "revocation_status",
+                "revocation_error_code",
+                "disconnect_requested_at",
+            ):
+                connection_config.pop(key, None)
+        source.config = connection_config
         save_source_credentials(db, source, config, values)
         source.cursor = None
         source.last_error = None

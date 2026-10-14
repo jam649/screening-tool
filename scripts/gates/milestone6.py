@@ -38,7 +38,7 @@ from app.config import Config
 from app.connectors.qbo_common import load_source_credentials
 from app.csl.service import refresh_csl
 from app.main import create_app
-from app.models import CSLVersion, Source
+from app.models import CSLVersion, Party, Source
 from app.security import COOKIE_NAME
 
 ADMIN_EMAIL = "qbo-fixture-admin@example.test"
@@ -381,12 +381,48 @@ class Gate:
     def phase(self, value):
         self.call("POST", "/_fixture/qbo/phase", {"phase": value})
 
+    def wait_screening(self, outcome):
+        task_id = outcome.get("pending_task_id")
+        if not task_id:
+            return None
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            records = self.call(
+                "GET",
+                "/api/v1/audit-log?action=screening.task_completed"
+                + "&target_table=screening_tasks&target_id="
+                + task_id,
+            ).json()["items"]
+            if records:
+                return self.call(
+                    "GET", "/api/v1/screen/runs/" + records[0]["after"]["run_id"]
+                ).json()
+            time.sleep(0.1)
+        raise GateFailure("original_source_task_completion_timeout")
+
     def sync(self, mode="incremental", expected="success"):
         queued = self.call(
             "POST", f"/api/v1/sources/{self.source_id}/sync", {"mode": mode}, 202
         ).json()
         require(queued["status"] == "queued", "sync_202_is_queued")
-        return self.wait(queued["attempt_id"], expected)
+        operation = self.wait(queued["attempt_id"], expected)
+        if expected == "success":
+            self.wait_screening(operation["outcome"])
+        return operation
+
+    def source_tasks(self):
+        records = self.call(
+            "GET",
+            "/api/v1/audit-log?action=screening.enqueued&target_table=screening_tasks&limit=1000",
+        ).json()["items"]
+        return {
+            row["target_id"] for row in records if row["after"].get("source_id") == self.source_id
+        }
+
+    def party_inputs(self):
+        # Compare persisted party fields, excluding changing derived history/health.
+        fields = [column.key for column in Party.__mapper__.column_attrs]
+        return {key: {field: row[field] for field in fields} for key, row in self.parties().items()}
 
     def parties(self):
         rows = self.call("GET", "/api/v1/parties?limit=100").json()["items"]
@@ -417,7 +453,8 @@ class Gate:
             "oauth_callback_connected",
         )
         require(response.headers["referrer-policy"] == "no-referrer", "callback_no_referrer")
-        for _ in range(100):
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
             rows = self.call("GET", "/api/v1/monitoring/status").json()["operations"]
             attempts = [
                 row
@@ -425,20 +462,14 @@ class Gate:
                 if row["operation"] == "source_sync"
                 and row["source_id"] == self.source_id
                 and row["id"] not in previous
-                and row["status"] in {"queued", "running"}
             ]
             if attempts:
-                self.wait(attempts[0]["attempt_id"])
-                break
-            if any(
-                row["operation"] == "source_sync"
-                and row["source_id"] == self.source_id
-                and row["id"] not in previous
-                and row["status"] == "success"
-                for row in rows
-            ):
+                applied = self.wait(attempts[0]["id"])
+                self.wait_screening(applied["outcome"])
                 break
             time.sleep(0.1)
+        else:
+            raise GateFailure("new_callback_full_sync_attempt_missing")
         require(
             self.call("GET", f"/api/v1/sources/{self.source_id}").json()["record_count"] == 2,
             "initial_full_two_records",
@@ -538,16 +569,21 @@ class Gate:
             },
             201,
         ).json()["disposition"]
+        before_tasks, before_inputs = self.source_tasks(), self.party_inputs()
         unchanged = self.sync("full")["outcome"]
         require(
-            unchanged["unchanged"] == 2 and not unchanged["run_ids"],
-            "unchanged_hash_no_screening",
+            unchanged["unchanged"] == 2
+            and unchanged["added"] == unchanged["changed"] == unchanged["deleted"] == 0
+            and unchanged.get("pending_task_id") is None
+            and self.source_tasks() == before_tasks
+            and self.party_inputs() == before_inputs,
+            "unchanged_hash_creates_no_task_or_party_writes",
         )
         self.check("human_false_positive_and_unchanged_hash_no_write_scope")
         self.phase("changed")
         changed = self.sync()["outcome"]
         require(
-            changed["changed"] == 1 and changed["screening_status"] == "success",
+            changed["changed"] == 1 and self.wait_screening(changed)["parties_screened"] == 1,
             "cdc_scoped_change",
         )
         require(
@@ -619,6 +655,12 @@ class Gate:
                 headers={"intuit-signature": signature},
             )
             require(response.status_code == 200, "signed_webhook_accepted")
+        receipts = self.call(
+            "GET", "/api/v1/audit-log?action=qbo.webhook_received&target_id=" + self.source_id
+        ).json()["items"]
+        require(len(receipts) == 1, "signed_duplicate_one_durable_receipt")
+        delivered = self.wait(receipts[0]["after"]["attempt_id"])
+        self.wait_screening(delivered["outcome"])
         self.check("signed_duplicate_cloudevents_real_http")
         self.phase("refresh_failed")
         self.sync(expected="failed")
