@@ -24,3 +24,42 @@
 backend/app/adjudicators/data/*
 !backend/app/adjudicators/data/laya-multilingual-tokenizer.json.gz
 !backend/app/adjudicators/data/NOTICE.txt
+
+# Authoring context and maintained test/research tools are not runtime inputs.
+.21st
+scripts/gates
+scripts/research
+tests/integration
+backend/tests
+frontend/tests
+
+# Local authoring and generated verification artifacts.
+.claude
+.codex
+.cursor
+.aider*
+context
+scratch
+experiments
+tmp
+artifacts
+screenshots
+transcripts
+reports
+exports
+test-results
+playwright-report
+**/.cache
+**/.hypothesis
+**/.nyc_output
+**/coverage
+**/*.log
+**/*.prof
+**/*.pstats
+**/*.lcov
+screening-tool Design Document v1.md
+
+docs/milestones
+docs/plans
+docs/reviews
+docs/design-v1.md

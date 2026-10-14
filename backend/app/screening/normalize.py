@@ -3,6 +3,7 @@
 import re
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 import pycountry
@@ -32,6 +33,7 @@ DEFAULT_LEGAL_SUFFIXES = (
 )
 
 
+@lru_cache(maxsize=65_536)
 def normalize_text(value: str | None) -> str:
     text = unicodedata.normalize("NFKC", value or "").casefold()
     return " ".join("".join(c if c.isalnum() else " " for c in text).split())
@@ -49,6 +51,13 @@ class NormalizedName:
 def normalize_name(
     value: str, party_type: str = "company", legal_suffixes=DEFAULT_LEGAL_SUFFIXES
 ) -> NormalizedName:
+    # Cache values, not mutable records/IDs: connector edits and legal-suffix
+    # settings cannot reuse a previous record's normalization.
+    return _normalize_name(value, party_type, tuple(legal_suffixes))
+
+
+@lru_cache(maxsize=65_536)
+def _normalize_name(value: str, party_type: str, legal_suffixes: tuple[str, ...]) -> NormalizedName:
     suffixes = {normalize_text(suffix) for suffix in legal_suffixes}
 
     def clean(text: str) -> str:
@@ -77,6 +86,7 @@ def normalize_name(
     )
 
 
+@lru_cache(maxsize=1024)
 def normalize_country(value: str | None, *, strict: bool = False) -> str | None:
     if not value or not value.strip():
         return None

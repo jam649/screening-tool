@@ -16,6 +16,8 @@ class CandidateIndex:
         self.entries = {entry.id: entry for entry in entries}
         self.tokens: dict[str, set[str]] = defaultdict(set)
         self.phonetic: dict[str, set[str]] = defaultdict(set)
+        self.trigrams: dict[str, set[str]] = defaultdict(set)
+        self.approximate: dict[str, frozenset[str]] = {}
         self.full_index: dict[str, str] = {}
         self.choice_entries: dict[str, str] = {}
         self.stopwords = set(settings.candidate_stopwords)
@@ -29,10 +31,33 @@ class CandidateIndex:
                     for token in tokens:
                         if len(token) >= 3 and token not in self.stopwords:
                             self.tokens[token].add(entry.id)
+                            if len(token) >= 5:
+                                for gram in self._grams(token):
+                                    self.trigrams[gram].add(token)
                     if tokens:
                         for code in doublemetaphone(tokens[0]):
                             if code:
                                 self.phonetic[code].add(entry.id)
+
+    @staticmethod
+    def _grams(token: str) -> set[str]:
+        return {token[n : n + 3] for n in range(len(token) - 2)}
+
+    def _approximate_ids(self, token: str) -> frozenset[str]:
+        if token not in self.approximate:
+            # Supplement all name parts, including surnames, independently of
+            # unrelated exact blocks. Two shared trigrams and ratio >=80 keep
+            # retrieval bounded by the word index without imposing a result cap.
+            words: dict[str, int] = defaultdict(int)
+            for gram in self._grams(token):
+                for word in self.trigrams.get(gram, ()):
+                    words[word] += 1
+            ids: set[str] = set()
+            for word, count in words.items():
+                if count >= 2 and fuzz.ratio(token, word, score_cutoff=80) >= 80:
+                    ids.update(self.tokens[word])
+            self.approximate[token] = frozenset(ids)
+        return self.approximate[token]
 
     def candidates(self, party: Any) -> tuple[list[Any], bool]:
         ids: set[str] = set()
@@ -43,6 +68,8 @@ class CandidateIndex:
                 for token in tokens:
                     if len(token) >= 3 and token not in self.stopwords:
                         ids.update(self.tokens.get(token, set()))
+                        if len(token) >= 5:
+                            ids.update(self._approximate_ids(token))
                 if tokens:
                     for code in doublemetaphone(tokens[0]):
                         ids.update(self.phonetic.get(code, set()))
@@ -51,12 +78,11 @@ class CandidateIndex:
             for name in party_names:
                 for variant in name.variants:
                     # The fallback scans every name, not only already blocked candidates.
-                    for _, _, key in process.extract(
+                    for _, _, key in process.extract_iter(
                         variant,
                         self.full_index,
                         scorer=fuzz.WRatio,
                         score_cutoff=self.settings.candidate_min,
-                        limit=20,
                     ):
                         ids.add(self.choice_entries[key])
         return [self.entries[key] for key in sorted(ids)], fallback

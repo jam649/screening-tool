@@ -1,0 +1,9 @@
+# Fresh isolated release fixture using the actual production entry point.
+services:
+  screening-tool:
+    environment:
+      SCREENING_TOOL_ALLOWED_HOSTS: '["screening.example.test"]'
+      SCREENING_TOOL_ALLOWED_ORIGINS: '["https://screening.example.test"]'
+      FORWARDED_ALLOW_IPS: "127.0.0.1,::1"
+    volumes:
+      - ./tests/integration:/tmp/gates:ro

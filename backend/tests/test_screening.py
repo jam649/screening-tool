@@ -3,7 +3,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from typer.testing import CliRunner
 
 from app.cli import cli
@@ -13,6 +13,7 @@ from app.models import (
     Disposition,
     Hit,
     Party,
+    RunPartyEvidence,
     ScreeningRun,
     ScreeningTask,
     Setting,
@@ -402,7 +403,7 @@ def test_failed_task_is_atomic_sanitized_and_retries(seeded, monkeypatch):
 
     original_score = engine.score_pair
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise RuntimeError("credential-must-not-be-recorded")
 
     monkeypatch.setattr(engine, "score_pair", fail)
@@ -552,7 +553,9 @@ def test_newer_positive_overrides_old_exact_false_positive_and_new_clear_restore
     assert queue_hits(db) == []
 
 
-def test_full_run_explicitly_rescores_prior_delta_candidate_when_blocking_changes(seeded):
+def test_full_run_explicitly_rescores_prior_delta_candidate_when_blocking_changes(
+    seeded, monkeypatch
+):
     db, record, _ = seeded
     record.name = "Nikolay Chugunov"
     record.party_type = "individual"
@@ -579,7 +582,16 @@ def test_full_run_explicitly_rescores_prior_delta_candidate_when_blocking_change
     settings = ScreeningSettings()
     index = CandidateIndex(list(db.scalars(select(CSLEntry))), settings)
     candidates, fallback = index.candidates(record)
-    assert not fallback and target.id not in {entry.id for entry in candidates}
+    assert not fallback and target.id in {entry.id for entry in candidates}
+    # Policy v2 now retrieves this first-run pair. Independently retain the
+    # prior-pair safeguard if any later blocking policy omits an observed pair.
+    original_candidates = CandidateIndex.candidates
+
+    def omit_previously_observed(self, party):
+        candidates, fallback = original_candidates(self, party)
+        return [entry for entry in candidates if entry.id != target.id], fallback
+
+    monkeypatch.setattr(CandidateIndex, "candidates", omit_previously_observed)
     second = run_screening(db)
     observation = db.scalar(
         select(Hit).where(Hit.run_id == second.id, Hit.csl_entry_id == target.id)
@@ -663,3 +675,299 @@ def test_busy_task_drain_retains_earlier_success_and_pending_task(seeded, monkey
     retry = process_pending_tasks(db)
     assert len(retry) == 1 and retry[0].hits_new == 0
     assert pending.status == "complete" and pending.attempts == 1
+
+
+def test_queue_materializes_only_original_returned_anchor_not_repeat_history(seeded):
+    db, _, _ = seeded
+    first = run_screening(db)
+    original_id = db.scalar(select(Hit.id).where(Hit.run_id == first.id))
+    repeat = run_screening(db)
+    assert repeat.hits_new == 0
+    assert db.scalar(select(func.count()).select_from(Hit)) == 2
+    db.expunge_all()
+    loaded = []
+
+    def record_loaded(hit, context):
+        loaded.append(hit.id)
+
+    event.listen(Hit, "load", record_loaded)
+    try:
+        current = queue_hits(db)
+    finally:
+        event.remove(Hit, "load", record_loaded)
+    assert [hit.id for hit in current] == [original_id]
+    assert loaded == [original_id]
+    assert current[0].party_snapshot["name"] == "Acme Manufacturing"
+
+
+@pytest.mark.parametrize("resolution", ["zero_hit", "human"])
+def test_many_scoped_zero_hit_runs_do_not_load_unrelated_manifests_or_lose_authority(
+    seeded, client, admin, resolution
+):
+    from app.reports.metrics import (
+        current_screening_coverage,
+        latest_current_screenings,
+        party_screenings,
+    )
+
+    db, record, _ = seeded
+    original_party_id = record.id
+    first = run_screening(db, party_ids=[record.id])
+    first_id, first_finished = first.id, first.finished_at
+    original = db.scalar(select(Hit).where(Hit.run_id == first.id))
+    original_id, original_snapshot = original.id, original.party_snapshot.copy()
+    source_id = record.source_id
+    values = {"name": "Qwerty Furniture", "country_iso2": "US"}
+    unrelated = Party(
+        source_id=source_id,
+        external_id="zero-history",
+        **values,
+        record_hash=party_record_hash(values),
+        raw={"fixture": "zero-hit history"},
+    )
+    db.add(unrelated)
+    db.commit()
+    unrelated_id = unrelated.id
+    for _ in range(60):
+        run_screening(db, party_ids=[unrelated_id])
+    assert (
+        db.scalar(
+            select(func.count())
+            .select_from(RunPartyEvidence)
+            .where(
+                RunPartyEvidence.party_id == unrelated_id,
+                RunPartyEvidence.hits_recorded == 0,
+            )
+        )
+        == 60
+    )
+    db.expunge_all()
+    loaded_runs = []
+    scope_reads = []
+
+    def run_loaded(run, context):
+        loaded_runs.append(run.id)
+
+    def sql_seen(connection, cursor, statement, parameters, context, many):
+        if statement.startswith("SELECT JSON_QUOTE(JSON_EXTRACT(screening_runs.settings_snapshot"):
+            scope_reads.append(parameters)
+
+    event.listen(ScreeningRun, "load", run_loaded)
+    event.listen(db.bind, "before_cursor_execute", sql_seen)
+    try:
+        current = queue_hits(db, party_id=original_party_id)
+        assert [hit.id for hit in current] == [original_id]
+        assert len(scope_reads) == 1
+        scope_reads.clear()
+        assert current_screening_coverage(db) == {original_party_id: True, unrelated_id: True}
+        assert len(scope_reads) == 2
+        assert loaded_runs == []
+        latest = latest_current_screenings(db)
+        assert latest[original_party_id] == first_finished
+        assert latest[unrelated_id] > first_finished
+        assert loaded_runs == []
+        history = party_screenings(db, party_id=original_party_id)
+        assert list(history) == [original_party_id]
+        assert [run.id for run in history[original_party_id]] == [first_id]
+        assert loaded_runs == [first_id]
+    finally:
+        event.remove(ScreeningRun, "load", run_loaded)
+        event.remove(db.bind, "before_cursor_execute", sql_seen)
+    original = db.get(Hit, original_id)
+    if resolution == "zero_hit":
+        db.add(Setting(key="score_weights", value={"country_match": -100}))
+        db.commit()
+        later = run_screening(db, party_ids=[original_party_id])
+        assert db.scalar(select(func.count()).select_from(Hit).where(Hit.run_id == later.id)) == 0
+        assert original.status == "open" and queue_hits(db, party_id=original_party_id) == []
+        assert db.scalar(select(func.count()).select_from(Disposition)) == 0
+    else:
+        decision = decide(client, admin, original, "confirmed_match")
+        repeat = run_screening(db, party_ids=[original_party_id])
+        observed = db.scalar(select(Hit).where(Hit.run_id == repeat.id))
+        assert observed.explanation["completed_disposition_id"] == decision["id"]
+        assert repeat.hits_new == 0 and queue_hits(db, party_id=original_party_id) == []
+        assert db.get(Disposition, decision["id"]).actor_user_id == admin["user"]["id"]
+    assert original.party_snapshot == original_snapshot
+
+
+def test_tied_legacy_runs_without_scopes_keep_original_anchor_and_human_authority(
+    seeded, client, admin
+):
+    from app.models import utcnow
+    from app.reports.metrics import (
+        current_screening_coverage,
+        latest_current_screenings,
+        party_screenings,
+    )
+    from app.screening.engine import current_scoring_context
+
+    db, record, refresh = seeded
+    entry = db.scalar(select(CSLEntry))
+    score = score_pair(record, entry, ScreeningSettings())
+    timestamp = utcnow()
+    original_id = None
+    run_ids = set()
+    for _ in range(2):
+        legacy = ScreeningRun(
+            trigger="manual",
+            csl_version_id=refresh.version.id,
+            started_at=timestamp,
+            settings_snapshot={},
+            parties_screened=1,
+        )
+        db.add(legacy)
+        db.flush()
+        explanation = {**score.explanation, "queue_context": current_scoring_context(db)}
+        if original_id:
+            explanation["queue_anchor_hit_id"] = original_id
+        hit = Hit(
+            run_id=legacy.id,
+            party_id=record.id,
+            csl_entry_id=entry.id,
+            party_hash=record.record_hash,
+            entry_hash=entry.entry_hash,
+            det_score=score.score,
+            final_confidence=score.score,
+            bucket=bucket(score.score, ScreeningSettings()),
+            status="open",
+            explanation=explanation,
+            party_snapshot=snapshot(record),
+            entry_snapshot=snapshot(entry),
+        )
+        db.add(hit)
+        db.flush()
+        original_id = original_id or hit.id
+        legacy.finished_at = timestamp
+        run_ids.add(legacy.id)
+        db.commit()
+    assert [hit.id for hit in queue_hits(db)] == [original_id]
+    assert {run.id for run in party_screenings(db, party_id=record.id)[record.id]} == run_ids
+    assert current_screening_coverage(db) == {record.id: False}
+    assert latest_current_screenings(db) == {}
+    original = db.get(Hit, original_id)
+    decided = decide(client, admin, original, "confirmed_match")
+    assert db.get(Disposition, decided["id"]).actor_user_id == admin["user"]["id"]
+    assert queue_hits(db) == []
+    assert db.scalar(select(func.count()).select_from(Hit)) == 2
+    assert db.scalar(select(func.count()).select_from(Suppression)) == 0
+
+
+@pytest.mark.parametrize("resolution", ["human", "zero_hit"])
+def test_modern_tied_runs_use_run_order_for_queue_repeat_and_human_authority(
+    seeded, client, admin, monkeypatch, resolution
+):
+    from copy import deepcopy
+    from datetime import timedelta
+
+    import app.screening.engine as engine
+    from app.models import utcnow
+
+    db, record, _ = seeded
+    first = run_screening(db)
+    template = db.scalar(select(Hit).where(Hit.run_id == first.id))
+    evidence = db.scalar(select(RunPartyEvidence).where(RunPartyEvidence.run_id == first.id))
+    original_snapshot = deepcopy(template.party_snapshot)
+    timestamp = utcnow() + timedelta(seconds=10)
+    anchors = []
+    # The later run ID wins even when the earlier run's hit was inserted later.
+    # These are valid modern records with full scope and zero-hit participation
+    # support, not the legacy missing-scope fallback.
+    for ordinal in (1, 2):
+        run = ScreeningRun(
+            id=f"00000000-0000-0000-0000-{ordinal:012d}",
+            trigger="manual",
+            csl_version_id=first.csl_version_id,
+            started_at=timestamp,
+            settings_snapshot=deepcopy(first.settings_snapshot),
+            parties_screened=1,
+        )
+        db.add(run)
+        db.flush()
+        hit = Hit(
+            run_id=run.id,
+            party_id=record.id,
+            csl_entry_id=template.csl_entry_id,
+            party_hash=template.party_hash,
+            entry_hash=template.entry_hash,
+            created_at=timestamp + timedelta(seconds=3 - ordinal),
+            det_score=template.det_score,
+            final_confidence=template.final_confidence,
+            bucket=template.bucket,
+            status="open",
+            explanation=deepcopy(template.explanation),
+            party_snapshot=deepcopy(template.party_snapshot),
+            entry_snapshot=deepcopy(template.entry_snapshot),
+        )
+        db.add(hit)
+        db.add(
+            RunPartyEvidence(
+                run_id=run.id,
+                party_id=record.id,
+                party_hash=record.record_hash,
+                party_snapshot=deepcopy(evidence.party_snapshot),
+                source_snapshot=deepcopy(evidence.source_snapshot),
+                scoring_context=evidence.scoring_context,
+                decision_context=evidence.decision_context,
+                candidates_considered=1,
+                hits_recorded=1,
+                result_counts=deepcopy(evidence.result_counts),
+            )
+        )
+        db.flush()
+        run.finished_at = timestamp + timedelta(seconds=3)
+        db.commit()
+        anchors.append(hit)
+    assert anchors[0].created_at > anchors[1].created_at
+    assert [hit.id for hit in queue_hits(db)] == [anchors[1].id]
+    assert queue_hit_is_current(db, anchors[1])
+    assert not queue_hit_is_current(db, anchors[0])
+    monkeypatch.setattr(engine, "utcnow", lambda: timestamp + timedelta(seconds=4))
+    repeat = run_screening(db)
+    observed = db.scalar(select(Hit).where(Hit.run_id == repeat.id))
+    assert repeat.hits_new == 0
+    assert observed.explanation["queue_anchor_hit_id"] == anchors[1].id
+    assert [hit.id for hit in queue_hits(db)] == [anchors[1].id]
+    if resolution == "human":
+        decision = decide(client, admin, anchors[1], "confirmed_match")
+        assert db.get(Disposition, decision["id"]).actor_user_id == admin["user"]["id"]
+        assert queue_hits(db) == []
+    else:
+        db.add(Setting(key="score_weights", value={"country_match": -100}))
+        db.commit()
+        monkeypatch.setattr(engine, "utcnow", lambda: timestamp + timedelta(seconds=5))
+        later = run_screening(db)
+        assert db.scalar(select(func.count()).select_from(Hit).where(Hit.run_id == later.id)) == 0
+        assert queue_hits(db) == []
+        assert all(hit.status == "open" for hit in anchors)
+        assert db.scalar(select(func.count()).select_from(Disposition)) == 0
+    assert all(hit.party_snapshot == original_snapshot for hit in anchors)
+
+
+def test_auto_clear_policy_is_frozen_once_with_independent_inference_and_hit_copies(
+    seeded, monkeypatch
+):
+    db, _, _ = seeded
+    refresh_csl(db, data=json.dumps([listing(), listing(number="second")]).encode())
+    calls = []
+    policy_snapshot = ScreeningSettings.auto_clear_snapshot
+
+    def counted(settings):
+        calls.append(True)
+        return policy_snapshot(settings)
+
+    monkeypatch.setattr(ScreeningSettings, "auto_clear_snapshot", counted)
+    observed = []
+
+    def hook(party, entry, score, explanation, settings):
+        observed.append(explanation["auto_clear_policy"]["auto_clear_threshold"])
+        explanation["auto_clear_policy"]["auto_clear_threshold"] = 999
+        return Adjudication()
+
+    run = run_screening(db, adjudicate=hook)
+    hits = list(db.scalars(select(Hit).where(Hit.run_id == run.id)))
+    assert len(calls) == 1
+    assert observed == [65, 65]
+    assert len(hits) == 2
+    assert hits[0].explanation["auto_clear_policy"] is not hits[1].explanation["auto_clear_policy"]
+    assert all(hit.explanation["auto_clear_policy"]["auto_clear_threshold"] == 65 for hit in hits)

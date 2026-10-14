@@ -4,10 +4,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-test.use({ trace: "off" });
+test.use({ trace: "off", video: "off" });
+test.describe.configure({ retries: 0 });
 
 // Run this file alone against a newly created, disposable Docker data volume:
 // PLAYWRIGHT_BASE_URL=http://localhost:8001 SCREENING_TOOL_GATE_CONTAINER=<container>
+// Optional SCREENING_TOOL_GATE_ARTIFACT_PREFIX=milestone-9-readme preserves earlier captures.
 // npm test -- real-csv.spec.ts --workers=1
 // The operator CLI uses the packaged official 300-entry fixture; browser API calls
 // and uploads below are real, with no route interception or mocked responses.
@@ -15,6 +17,8 @@ test("real Docker CSV gate creates Admin, imports 2060 parties, and preserves on
   const container = process.env.SCREENING_TOOL_GATE_CONTAINER;
   test.skip(!process.env.PLAYWRIGHT_BASE_URL || !container, "Requires an isolated fresh Docker installation and explicit gate container.");
   test.setTimeout(180_000);
+  const artifactPrefix = process.env.SCREENING_TOOL_GATE_ARTIFACT_PREFIX ?? "milestone-3";
+  expect(artifactPrefix, "Use a bounded filename prefix without path separators.").toMatch(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/);
   const setupResponse = await context.request.get("/api/v1/setup");
   expect(setupResponse.ok()).toBeTruthy();
   const setup = await setupResponse.json();
@@ -129,10 +133,21 @@ test("real Docker CSV gate creates Admin, imports 2060 parties, and preserves on
   await mkdir(screenshots, { recursive: true });
   await mkdir(artifacts, { recursive: true });
   await wizard.getByRole("button", { name: "Back to sources" }).click();
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-  await page.screenshot({ path: join(screenshots, "milestone-3-real-docker-sources.png"), fullPage: true });
-  await writeFile(join(artifacts, "milestone-3-real-docker-gate.json"), JSON.stringify({
+  const capture = async (view: string) => {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.screenshot({ path: join(screenshots, `${artifactPrefix}-real-docker-${view}.png`), fullPage: true });
+  };
+  await capture("sources");
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Overview", level: 1, exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Open items/ })).toContainText(before.total.toLocaleString("en-US"));
+  await capture("overview");
+  await page.goto("/queue");
+  await expect(page.getByRole("table", { name: "Recorded at screening time", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Decision note", { exact: true })).toBeVisible();
+  await capture("review-queue");
+  await writeFile(join(artifacts, `${artifactPrefix}-real-docker-gate.json`), JSON.stringify({
     fixture_entries: seeded.version.entry_count, parties: first.source.record_count,
     first_added: first.added, completed_runs: runRows.length,
     latest_version_coverage: dashboard.coverage_latest_version, open_items: before.total,

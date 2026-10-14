@@ -32,6 +32,7 @@ import {
   type Disposition,
   type HitDetail,
   type HitSummary,
+  type JsonRecord,
 } from "./reviewApi";
 import "./review.css";
 
@@ -169,6 +170,42 @@ export function DecisionRecord({ decision, label }: { decision: Disposition; lab
   );
 }
 
+type Side = "party" | "entry";
+const sideLabel = (side: Side) => (side === "party" ? "Your record" : "Listing");
+const RAW_KEY = "raw";
+
+// Counts recorded top-level keys whose values differ, for the summary only; nothing is re-scored.
+function differingKeys(before: unknown, after: unknown): number | null {
+  if (asRecord(before) !== before || asRecord(after) !== after) return null;
+  const a = before as JsonRecord;
+  const b = after as JsonRecord;
+  return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(
+    (key) => JSON.stringify(a[key]) !== JSON.stringify(b[key]),
+  ).length;
+}
+
+// The raw source payload can run to thousands of characters, so it is disclosed on request, in full.
+function RawChange({ side, change }: { side: Side; change: JsonRecord }) {
+  const count = differingKeys(change.before, change.after);
+  return (
+    <details className="rv-disclosure rv-raw">
+      <summary>
+        {sideLabel(side)} · Raw source data changed
+        <span className="rv-muted">
+          {" · "}
+          {count === null
+            ? "show exact before and after"
+            : `${formatCount(count)} top-level ${count === 1 ? "field differs" : "fields differ"}; show exact before and after`}
+        </span>
+      </summary>
+      <h5>Before</h5>
+      <JsonBlock value={change.before} />
+      <h5>After</h5>
+      <JsonBlock value={change.after} />
+    </details>
+  );
+}
+
 export function WhatChanged({ changes }: { changes: unknown }) {
   const record = asRecord(changes);
   const rows = (["party", "entry"] as const).flatMap((side) =>
@@ -180,22 +217,35 @@ export function WhatChanged({ changes }: { changes: unknown }) {
   );
   if (!rows.length)
     return <p className="rv-muted">No field differences were recorded since that decision.</p>;
+  const fields = rows.filter((row) => row.key !== RAW_KEY);
+  const raw = rows.filter((row) => row.key === RAW_KEY);
   return (
-    <dl className="rv-changes">
-      {rows.map(({ side, key, change }) => (
-        <div key={`${side}.${key}`}>
-          <dt>
-            {side === "party" ? "Your record" : "Listing"} · {humanize(key)}
-          </dt>
-          <dd>
-            <span className="rv-before">{displayValue(change.before)}</span>{" "}
-            <span aria-hidden="true">→</span>
-            <span className="rv-sr">changed to</span>{" "}
-            <span className="rv-after">{displayValue(change.after)}</span>
-          </dd>
-        </div>
+    <>
+      {fields.length ? (
+        <dl className="rv-changes">
+          {fields.map(({ side, key, change }) => (
+            <div key={`${side}.${key}`}>
+              <dt>
+                {sideLabel(side)} · {humanize(key)}
+              </dt>
+              <dd>
+                <span className="rv-before">{displayValue(change.before)}</span>{" "}
+                <span aria-hidden="true">→</span>
+                <span className="rv-sr">changed to</span>{" "}
+                <span className="rv-after">{displayValue(change.after)}</span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p className="rv-muted">
+          Only the raw source data changed since that decision; no named field differs.
+        </p>
+      )}
+      {raw.map(({ side, change }) => (
+        <RawChange key={side} side={side} change={change} />
       ))}
-    </dl>
+    </>
   );
 }
 
@@ -215,7 +265,8 @@ export function PriorDecision({ hit }: { hit: HitDetail }) {
         </p>
       )}
       <h4>What changed since then</h4>
-      <WhatChanged changes={prior.what_changed} />
+      {/* Keyed by comparison so a different pair always starts with its disclosures closed. */}
+      <WhatChanged key={hit.id} changes={prior.what_changed} />
     </section>
   );
 }

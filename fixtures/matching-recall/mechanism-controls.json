@@ -1,0 +1,597 @@
+{
+  "controls": [
+    {
+      "case_id": "alias-slot-crowding",
+      "distractors": [
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [
+            "Nikolay Chugunov Alias 0",
+            "Nikolay Chugunov Alias 1",
+            "Nikolay Chugunov Alias 2",
+            "Nikolay Chugunov Alias 3",
+            "Nikolay Chugunov Alias 4",
+            "Nikolay Chugunov Alias 5",
+            "Nikolay Chugunov Alias 6",
+            "Nikolay Chugunov Alias 7",
+            "Nikolay Chugunov Alias 8",
+            "Nikolay Chugunov Alias 9",
+            "Nikolay Chugunov Alias 10",
+            "Nikolay Chugunov Alias 11",
+            "Nikolay Chugunov Alias 12",
+            "Nikolay Chugunov Alias 13",
+            "Nikolay Chugunov Alias 14",
+            "Nikolay Chugunov Alias 15",
+            "Nikolay Chugunov Alias 16",
+            "Nikolay Chugunov Alias 17",
+            "Nikolay Chugunov Alias 18",
+            "Nikolay Chugunov Alias 19",
+            "Nikolay Chugunov Alias 20",
+            "Nikolay Chugunov Alias 21",
+            "Nikolay Chugunov Alias 22",
+            "Nikolay Chugunov Alias 23",
+            "Nikolay Chugunov Alias 24",
+            "Nikolay Chugunov Alias 25",
+            "Nikolay Chugunov Alias 26",
+            "Nikolay Chugunov Alias 27",
+            "Nikolay Chugunov Alias 28",
+            "Nikolay Chugunov Alias 29",
+            "Nikolay Chugunov Alias 30",
+            "Nikolay Chugunov Alias 31",
+            "Nikolay Chugunov Alias 32",
+            "Nikolay Chugunov Alias 33",
+            "Nikolay Chugunov Alias 34",
+            "Nikolay Chugunov Alias 35",
+            "Nikolay Chugunov Alias 36",
+            "Nikolay Chugunov Alias 37",
+            "Nikolay Chugunov Alias 38",
+            "Nikolay Chugunov Alias 39"
+          ],
+          "id": "distractor-first",
+          "name": "Unrelated Person Catalog",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        }
+      ],
+      "must_find": true,
+      "party": {
+        "address_lines": [],
+        "alt_names": [],
+        "city": null,
+        "country_iso2": "US",
+        "external_id": "mechanism-identity",
+        "name": "Nikolay Chugunov",
+        "party_type": "individual",
+        "role": "customer"
+      },
+      "reason": "Target is the declared same synthetic identity under a plausible spelling. One unrelated alias-heavy entry must not use up all fuzzy-choice slots.",
+      "same_party": true,
+      "targets": [
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-last",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        }
+      ]
+    },
+    {
+      "case_id": "distinct-target-tail",
+      "distractors": [],
+      "must_find": true,
+      "party": {
+        "address_lines": [],
+        "alt_names": [],
+        "city": null,
+        "country_iso2": "US",
+        "external_id": "mechanism-identity",
+        "name": "Nikolay Chugunov",
+        "party_type": "individual",
+        "role": "customer"
+      },
+      "reason": "Thirty independent synthetic source records identify the same person. Each target is labeled before scoring; none may disappear solely beyond a top-20 choice cap.",
+      "same_party": true,
+      "targets": [
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-00",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-01",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-02",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-03",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-04",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-05",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-06",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-07",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-08",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-09",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-10",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-11",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-12",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-13",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-14",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-15",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-16",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-17",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-18",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-19",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-20",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-21",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-22",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-23",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-24",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-25",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-26",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-27",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-28",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        },
+        {
+          "addresses": [
+            {
+              "country": "US"
+            }
+          ],
+          "alt_names": [],
+          "id": "target-29",
+          "name": "Mykola Chuhunov",
+          "programs": [
+            "Synthetic mechanism control"
+          ],
+          "remarks": "Explicit synthetic QA identity, not actual restricted listing.",
+          "source": "Entity List (EL) - Bureau of Industry and Security",
+          "type": "Individual"
+        }
+      ]
+    }
+  ],
+  "schema_version": 1
+}

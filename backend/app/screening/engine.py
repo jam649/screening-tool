@@ -6,7 +6,7 @@ A changed scoring context creates a fresh anchor. queue_hits selects the latest
 context for each current pairing while retaining superseded open evidence in history.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,7 +14,7 @@ from math import isfinite
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import inspect, select, text
+from sqlalchemy import exists, inspect, or_, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -186,6 +186,42 @@ def run_payload(run: ScreeningRun) -> dict[str, Any]:
     return snapshot(run)
 
 
+@dataclass(frozen=True, slots=True)
+class HitReference:
+    """Historical authority/context without materializing private snapshots."""
+
+    id: str
+    run_id: str
+    party_id: str
+    csl_entry_id: str
+    party_hash: str
+    entry_hash: str
+    status: str
+    bucket: str
+    queue_context: str | None
+    queue_anchor_hit_id: str | None
+
+
+def _hit_reference_query():
+    return select(
+        Hit.id,
+        Hit.run_id,
+        Hit.party_id,
+        Hit.csl_entry_id,
+        Hit.party_hash,
+        Hit.entry_hash,
+        Hit.status,
+        Hit.bucket,
+        Hit.explanation["queue_context"].as_string(),
+        Hit.explanation["queue_anchor_hit_id"].as_string(),
+    )
+
+
+def _hit_references(db: Session, query) -> Iterator[HitReference]:
+    for row in db.execute(query).yield_per(500):
+        yield HitReference(*row)
+
+
 def _begin(db: Session) -> None:
     # Auth/query dependencies may already have opened a read transaction. Mutations
     # must be explicitly flushed by callers before entering this owned transaction.
@@ -210,7 +246,7 @@ def queue_hits(
     """
     enabled_lists = load_settings(db).enabled_source_lists
     query = (
-        select(Hit)
+        _hit_reference_query()
         .join(ScreeningRun, Hit.run_id == ScreeningRun.id)
         .join(Party, Hit.party_id == Party.id)
         .join(CSLEntry, Hit.csl_entry_id == CSLEntry.id)
@@ -220,7 +256,14 @@ def queue_hits(
             Hit.party_hash == Party.record_hash,
             Hit.entry_hash == CSLEntry.entry_hash,
         )
-        .order_by(ScreeningRun.started_at.desc(), Hit.created_at.desc(), Hit.id.desc())
+        # Run ties use the same order as covering scopes and writer anchors.
+        # Hit insertion times cannot make an older tied run appear current.
+        .order_by(
+            ScreeningRun.started_at.desc(),
+            ScreeningRun.id.desc(),
+            Hit.created_at.desc(),
+            Hit.id.desc(),
+        )
     )
     if enabled_lists is not None:
         query = query.where(CSLEntry.source_list.in_(enabled_lists))
@@ -228,49 +271,96 @@ def queue_hits(
         query = query.where(Hit.party_id == party_id)
     if entry_id is not None:
         query = query.where(Hit.csl_entry_id == entry_id)
-    rows = db.scalars(query)
-    latest: dict[tuple[str, str], Hit] = {}
+    rows = _hit_references(db, query)
+    latest: dict[tuple[str, str], HitReference] = {}
     for hit in rows:
         key = hit.party_id, hit.csl_entry_id
         latest.setdefault(key, hit)
     if not latest:
         return []
-    scopes = []
-    for run in db.scalars(
-        select(ScreeningRun)
-        .where(ScreeningRun.finished_at.is_not(None))
+    pending = {
+        pair: observation
+        for pair, observation in latest.items()
+        if observation.status == "open" and observation.bucket != "low"
+    }
+    del latest
+    if not pending:
+        return []
+    pending_by_party: dict[str, set[str]] = {}
+    for party, entry in pending:
+        pending_by_party.setdefault(party, set()).add(entry)
+    relevant = (
+        select(RunPartyEvidence.run_id)
+        .join(Party)
+        .where(
+            RunPartyEvidence.party_id.in_(pending_by_party),
+            RunPartyEvidence.party_hash == Party.record_hash,
+        )
+    )
+    legacy = ~exists(select(RunPartyEvidence.id).where(RunPartyEvidence.run_id == ScreeningRun.id))
+    # Sort identifiers, never whole manifests: an SQLite temporary ORDER BY
+    # must not retain every historical JSON scope before the first result.
+    runs = db.execute(
+        select(ScreeningRun.id)
+        .where(
+            ScreeningRun.finished_at.is_not(None),
+            or_(ScreeningRun.id.in_(relevant), legacy),
+        )
         .order_by(ScreeningRun.started_at.desc(), ScreeningRun.id.desc())
-    ):
-        scope = run.settings_snapshot.get("scope")
-        if scope is not None:
+    ).yield_per(500)
+    active_ids = set()
+    try:
+        for (run_id,) in runs:
+            scope = db.scalar(
+                select(ScreeningRun.settings_snapshot["scope"]).where(ScreeningRun.id == run_id)
+            )
+            if scope is None:
+                continue
             party_ids = None if scope["party_ids"] is None else set(scope["party_ids"])
             entry_ids = None if scope["entry_ids"] is None else set(scope["entry_ids"])
-            scopes.append(
-                (run.id, party_ids, entry_ids, scope.get("party_hashes"), scope.get("entry_hashes"))
+            party_hashes, entry_hashes = scope.get("party_hashes"), scope.get("entry_hashes")
+            for party_id in list(
+                pending_by_party.keys() & party_ids if party_ids is not None else pending_by_party
+            ):
+                entries = pending_by_party[party_id]
+                for entry_id in list(entries & entry_ids if entry_ids is not None else entries):
+                    observation = pending[party_id, entry_id]
+                    if (
+                        party_hashes is not None
+                        and party_hashes.get(party_id) != observation.party_hash
+                        or entry_hashes is not None
+                        and entry_hashes.get(entry_id) != observation.entry_hash
+                    ):
+                        continue
+                    # The newest covering scope resolves this pair even with
+                    # zero hits. Older scopes cannot resurrect an old anchor.
+                    if run_id == observation.run_id:
+                        active_ids.add(observation.queue_anchor_hit_id or observation.id)
+                    del pending[party_id, entry_id]
+                    entries.remove(entry_id)
+                if not entries:
+                    del pending_by_party[party_id]
+            if not pending:
+                break
+    finally:
+        runs.close()
+    # Preserve legacy observations with no explicit covering manifest at all.
+    active_ids.update(row.queue_anchor_hit_id or row.id for row in pending.values())
+    # Preserve complete original objects at the public boundary, loading only
+    # returned anchors rather than every prior low/suppressed/repeat snapshot.
+    active: list[Hit] = []
+    ids = sorted(active_ids)
+    for start in range(0, len(ids), 900):
+        active.extend(
+            db.scalars(
+                select(Hit)
+                .where(
+                    Hit.id.in_(ids[start : start + 900]),
+                    Hit.status == "open",
+                )
+                .execution_options(populate_existing=True)
             )
-    active = []
-    for (party_id, entry_id), observation in latest.items():
-        # A later completed scope with no stored hit proves the current pair fell
-        # below candidate_min. It must not leave an older queue confidence active.
-        covering_run = next(
-            (
-                run_id
-                for run_id, party_ids, entry_ids, party_hashes, entry_hashes in scopes
-                if (party_ids is None or party_id in party_ids)
-                and (entry_ids is None or entry_id in entry_ids)
-                and (party_hashes is None or party_hashes.get(party_id) == observation.party_hash)
-                and (entry_hashes is None or entry_hashes.get(entry_id) == observation.entry_hash)
-            ),
-            None,
         )
-        if covering_run is not None and covering_run != observation.run_id:
-            continue
-        if observation.status != "open" or observation.bucket == "low":
-            continue
-        anchor_id = observation.explanation.get("queue_anchor_hit_id")
-        anchor = db.get(Hit, anchor_id) if anchor_id else observation
-        if anchor is not None and anchor.status == "open":
-            active.append(anchor)
     return sorted(
         active,
         key=lambda hit: (hit.bucket != "likely", -hit.final_confidence, hit.created_at),
@@ -291,7 +381,10 @@ def current_scoring_context(db: Session) -> str:
 
 
 def _bypassed_pairs(db: Session, parties: set[str]) -> set[tuple[str, str, str, str]]:
-    hits = {hit.id: hit for hit in db.scalars(select(Hit).where(Hit.party_id.in_(parties)))}
+    hits = {
+        hit.id: hit
+        for hit in _hit_references(db, _hit_reference_query().where(Hit.party_id.in_(parties)))
+    }
     humans: dict[tuple[str, str], Disposition] = {}
     positives: dict[tuple[str, str], Disposition] = {}
     false_positives: dict[tuple[str, str, str, str], Disposition] = {}
@@ -360,8 +453,9 @@ def _prepare(
     context_hash = canonical_hash(
         {**settings.scoring_snapshot(), "model": model.scoring_snapshot()}
     )
+    auto_clear_policy = settings.auto_clear_snapshot()
     decision_context = canonical_hash(
-        {"scoring_context": context_hash, "auto_clear_policy": settings.auto_clear_snapshot()}
+        {"scoring_context": context_hash, "auto_clear_policy": auto_clear_policy}
     )
     parties_query = select(Party).where(Party.deleted_at.is_(None))
     if party_ids is not None:
@@ -375,8 +469,40 @@ def _prepare(
     if settings.enabled_source_lists is not None:
         entries_query = entries_query.where(CSLEntry.source_list.in_(settings.enabled_source_lists))
     entries = list(db.scalars(entries_query))
-    if any(party.record_hash != party_record_hash(snapshot(party)) for party in parties) or any(
-        entry.entry_hash != csl_entry_hash(snapshot(entry)) for entry in entries
+    if any(
+        party.record_hash
+        != party_record_hash(
+            {
+                key: getattr(party, key)
+                for key in (
+                    "party_type",
+                    "name",
+                    "alt_names",
+                    "address_lines",
+                    "city",
+                    "region",
+                    "postal_code",
+                    "country_iso2",
+                )
+            }
+        )
+        for party in parties
+    ) or any(
+        entry.entry_hash
+        != csl_entry_hash(
+            {
+                key: getattr(entry, key)
+                for key in (
+                    "name",
+                    "alt_names",
+                    "addresses",
+                    "countries",
+                    "programs",
+                    "entity_type",
+                )
+            }
+        )
+        for entry in entries
     ):
         raise ScreeningValidationError(
             "Cached matching hashes require an explicit upgrade; "
@@ -413,8 +539,11 @@ def _prepare(
     entries_by_id = {entry.id: entry for entry in entries}
     hashes = {party.id: party.record_hash for party in parties}
     forced: dict[str, set[str]] = {}
-    for hit in db.scalars(
-        select(Hit).where(Hit.party_id.in_(party_set), Hit.status == "open", Hit.bucket != "low")
+    for hit in _hit_references(
+        db,
+        _hit_reference_query().where(
+            Hit.party_id.in_(party_set), Hit.status == "open", Hit.bucket != "low"
+        ),
     ):
         entry = entries_by_id.get(hit.csl_entry_id)
         if (
@@ -430,6 +559,9 @@ def _prepare(
         )
     }
     index = CandidateIndex(entries, settings)
+    # One immutable prepared snapshot per entry; actual persisted Hit snapshots
+    # and inference inputs are still copied independently before use.
+    entry_snapshots = {entry.id: snapshot(entry) for entry in entries}
     pairs: dict[str, list[PreparedPair]] = {}
     candidate_counts = {}
     for party in parties:
@@ -441,7 +573,7 @@ def _prepare(
         candidate_counts[party.id] = len(candidates)
         pairs[party.id] = []
         for entry in candidates:
-            scored = score_pair(party, entry, settings)
+            scored = score_pair(party, entry, settings, explanation_minimum=settings.candidate_min)
             if scored.score < settings.candidate_min:
                 continue
             explanation = deepcopy(scored.explanation)
@@ -450,7 +582,7 @@ def _prepare(
                     "blocking_fallback": fallback,
                     "queue_context": context_hash,
                     "decision_context": decision_context,
-                    "auto_clear_policy": settings.auto_clear_snapshot(),
+                    "auto_clear_policy": auto_clear_policy,
                 }
             )
             if entry.id in forced.get(party.id, set()):
@@ -462,7 +594,7 @@ def _prepare(
                 entry.entry_hash,
             ) not in bypassed and scored.score >= settings.review_threshold - 10
             pairs[party.id].append(
-                PreparedPair(snapshot(entry), scored.score, explanation, eligible)
+                PreparedPair(entry_snapshots[entry.id], scored.score, explanation, eligible)
             )
     prepared = PreparedScreening(
         settings,
@@ -471,7 +603,7 @@ def _prepare(
         csl_version_id or version.id,
         started_at,
         [snapshot(p) for p in parties],
-        [snapshot(e) for e in entries],
+        list(entry_snapshots.values()),
         source_snapshots,
         pairs,
         candidate_counts,
@@ -510,22 +642,28 @@ def _execute(
     db.flush()
     party_set = {party.id for party in parties}
     existing_hits = list(
-        db.scalars(
-            select(Hit)
+        _hit_references(
+            db,
+            _hit_reference_query()
             .join(ScreeningRun)
             .where(Hit.party_id.in_(party_set))
-            .order_by(ScreeningRun.started_at.desc(), Hit.created_at.desc(), Hit.id.desc())
+            .order_by(
+                ScreeningRun.started_at.desc(),
+                ScreeningRun.id.desc(),
+                Hit.created_at.desc(),
+                Hit.id.desc(),
+            ),
         )
     )
-    anchors: dict[tuple, Hit] = {}
+    anchors: dict[tuple, HitReference] = {}
     latest_anchors: set[tuple[str, str]] = set()
-    for hit in existing_hits:
-        pair = hit.party_id, hit.csl_entry_id
-        key = (*pair, hit.party_hash, hit.entry_hash, hit.explanation.get("queue_context"))
-        if not hit.explanation.get("queue_anchor_hit_id") and pair not in latest_anchors:
+    for reference in existing_hits:
+        pair = reference.party_id, reference.csl_entry_id
+        key = (*pair, reference.party_hash, reference.entry_hash, reference.queue_context)
+        if not reference.queue_anchor_hit_id and pair not in latest_anchors:
             latest_anchors.add(pair)
-            if hit.status == "open" and hit.bucket != "low":
-                anchors[key] = hit
+            if reference.status == "open" and reference.bucket != "low":
+                anchors[key] = reference
     suppressions = list(db.scalars(select(Suppression).where(Suppression.party_id.in_(party_set))))
     exact_suppressions = {
         (s.party_id, s.csl_entry_id, s.party_hash, s.entry_hash): s for s in suppressions
@@ -557,16 +695,16 @@ def _execute(
     scoped_entries = {entry.id: entry for entry in entries}
     party_hashes = {party.id: party.record_hash for party in parties}
     forced: dict[str, set[str]] = {}
-    for hit in existing_hits:
-        current_entry = scoped_entries.get(hit.csl_entry_id)
+    for reference in existing_hits:
+        current_entry = scoped_entries.get(reference.csl_entry_id)
         if (
-            hit.status == "open"
-            and hit.bucket != "low"
+            reference.status == "open"
+            and reference.bucket != "low"
             and current_entry is not None
-            and hit.party_hash == party_hashes[hit.party_id]
-            and hit.entry_hash == current_entry.entry_hash
+            and reference.party_hash == party_hashes[reference.party_id]
+            and reference.entry_hash == current_entry.entry_hash
         ):
-            forced.setdefault(hit.party_id, set()).add(hit.csl_entry_id)
+            forced.setdefault(reference.party_id, set()).add(reference.csl_entry_id)
     for party in parties:
         original_party = deepcopy(vars(party))
         counts = {

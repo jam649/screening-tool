@@ -40,8 +40,8 @@ class ConfiguredTrustedHostMiddleware:
             await self.app(scope, receive, send)
 
 
-def validate_key_binding(db: Session, config: Config) -> None:
-    """Refuse startup with a changed key; initialize a canary on first use."""
+def validate_key_binding(db: Session, config: Config, *, bind: bool = True) -> None:
+    """Verify existing encryption; bind an absent canary only when explicitly permitted."""
     canary = db.scalar(select(Setting).where(Setting.key == "__encryption_key_canary"))
     try:
         if canary is not None:
@@ -61,6 +61,8 @@ def validate_key_binding(db: Session, config: Config) -> None:
             "SCREENING_TOOL_SECRET_KEY does not match the database encryption key; "
             "restore the original key before starting"
         ) from exc
+    if not bind:
+        return
     db.add(
         Setting(
             key="__encryption_key_canary", value=encrypt_json(KEY_CANARY, config), encrypted=True

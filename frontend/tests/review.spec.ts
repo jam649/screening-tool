@@ -367,3 +367,242 @@ test("one native word expanding to multiple ASCII tokens requires all recorded t
   await expect(ownName).toHaveText("重庆");
   await expect(ownName.locator("mark")).toHaveCount(0);
 });
+
+// Clearly synthetic mocked raw source payloads, about 6000 characters together.
+const RAW_MEMO = "Synthetic mocked ledger memo line. ".repeat(84);
+const rawBefore = {
+  Id: "MOCK-1001",
+  DisplayName: "Harbor Freight",
+  Active: true,
+  Balance: 0,
+  Notes: "",
+  Fax: null,
+  Taxable: false,
+  Memo: "<script>window.__rawInjected = true</script>",
+  Ledger: `${RAW_MEMO}before`,
+};
+const rawAfter = {
+  ...rawBefore,
+  DisplayName: "Harbor Freight Partners",
+  Ledger: `${RAW_MEMO}after`,
+  Suffix: '<img src="x" onerror="window.__rawInjected = true">',
+};
+const rawOnlyBefore = { Id: "MOCK-2002", Status: null, Count: 0 };
+const rawOnlyAfter = { Id: "MOCK-2002", Status: "", Count: 0, Flag: false };
+
+const priorWith = (hitId: string, what_changed: unknown) => ({
+  id: `decision-old-${hitId}`,
+  hit_id: `${hitId}-old`,
+  kind: "false_positive",
+  actor_user_id: "morgan-id",
+  actor: { id: "morgan-id", email: "morgan@example.test", display_name: "Morgan Lee" },
+  note: "Different registry number and city.",
+  created_at: "2026-09-02T10:00:00Z",
+  what_changed,
+});
+
+const rawHit = () =>
+  makeHit("hit-raw", "Harbor Freight Partners", "Harbour Freight Partners LLC", "likely", 92, {
+    prior_disposition: priorWith("hit-raw", {
+      party: {
+        name: { before: "Harbor Freight", after: "Harbor Freight Partners" },
+        party_type: { before: "individual", after: "company" },
+        country_iso2: { before: "BE", after: "NL" },
+        address_lines: { before: ["12 Quay Street"], after: ["12 Quay Street", "Unit 2"] },
+        raw: { before: rawBefore, after: rawAfter },
+      },
+      entry: {
+        alt_names: { before: [], after: ["HFP Logistics"] },
+        addresses: {
+          before: [{ address: "1 Dock Road", city: "Antwerp" }],
+          after: [{ address: "14 Quay Street", city: "Rotterdam" }],
+        },
+      },
+    }),
+    explanation: {
+      components: { name: 88, country: 2, city: 3, address: 0, entity_type: 0, short_name: 0 },
+      matched_tokens: { party: [], entry: [] },
+      best_aliases: { party: "Harbor Freight Partners", entry: "Harbour Freight Partners LLC" },
+      hash_rule_change: { previous: 3, current: 4, reason: "Synthetic mocked rule note." },
+    },
+  });
+const rawOnlyHit = () =>
+  makeHit("hit-raw-only", "Larkspur Components", "Larkspur Component Works", "likely", 91, {
+    prior_disposition: priorWith("hit-raw-only", {
+      party: { raw: { before: rawOnlyBefore, after: rawOnlyAfter } },
+      entry: {},
+    }),
+  });
+
+const earlierRegion = (page: Page) =>
+  page.getByRole("region", { name: "Earlier decision on this pairing" });
+const nextFrame = (page: Page) =>
+  page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+  );
+async function capture(page: Page, path: string) {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await nextFrame(page);
+  await page.screenshot({ path, fullPage: true });
+}
+const fitsScreen = (page: Page) =>
+  page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+
+test("a long raw source diff stays in a closed disclosure while business changes and the real prior decision stay visible", async ({
+  page,
+}, testInfo) => {
+  expect(JSON.stringify(rawBefore).length + JSON.stringify(rawAfter).length).toBeGreaterThan(6000);
+  await page.setViewportSize({ width: 1440, height: 950 });
+  const api = await mockReview(page, [rawHit(), rawOnlyHit()]);
+  await page.goto("/queue");
+  const earlier = earlierRegion(page);
+  await expect(earlier).toContainText("Previously: Cleared as false positive");
+  await expect(earlier).toContainText("Morgan Lee (morgan@example.test)");
+  await expect(earlier).toContainText("Different registry number and city.");
+  await expect(earlier.locator("time[datetime='2026-09-02T10:00:00.000Z']")).toBeVisible();
+  await expect(earlier).toContainText("Matching rule changed from version 3 to 4.");
+
+  const changes = earlier.locator(".rv-changes");
+  await expect(changes.locator(":scope > div")).toHaveCount(6);
+  await expect(changes).toContainText("Your record · Name");
+  await expect(changes).toContainText("Your record · Party type");
+  await expect(changes).toContainText("Your record · Country");
+  await expect(changes).toContainText("BE");
+  await expect(changes).toContainText("Your record · Address");
+  await expect(changes).toContainText("12 Quay Street; Unit 2");
+  await expect(changes).toContainText("Listing · Alternate names");
+  await expect(changes).toContainText("Listing · Addresses");
+  await expect(changes).toContainText("1 Dock Road");
+  await expect(changes).not.toContainText("Raw");
+
+  const raw = earlier.locator("details.rv-raw");
+  await expect(raw).toHaveCount(1);
+  await expect(raw).toHaveJSProperty("open", false);
+  const summary = raw.locator(":scope > summary");
+  await expect(summary).toContainText("Your record · Raw source data changed");
+  await expect(summary).toContainText("3 top-level fields differ");
+  const shown = await earlier.innerText();
+  expect(shown).not.toContain("Synthetic mocked ledger memo");
+  expect(shown.length).toBeLessThan(1500);
+
+  await expect(clearButton(page)).toBeEnabled();
+  await expect(page.getByLabel("Decision note")).toBeVisible();
+  expect(api.posts).toHaveLength(0);
+  await capture(page, testInfo.outputPath("mocked-review-raw-disclosure-desktop-1440x950.png"));
+});
+
+test("Enter and Space reveal exact escaped payloads without deciding; refetch keeps it open and J/K resets it", async ({
+  page,
+}) => {
+  await page.clock.install();
+  const api = await mockReview(page, [rawHit(), rawOnlyHit()]);
+  await page.goto("/queue");
+  const list = page.getByRole("navigation", { name: "Open items" });
+  const harbor = list.getByRole("button", { name: /Harbor Freight Partners/ });
+  const larkspur = list.getByRole("button", { name: /Larkspur Components/ });
+  const earlier = earlierRegion(page);
+  const raw = earlier.locator("details.rv-raw");
+  const summary = raw.locator(":scope > summary");
+  const blocks = raw.locator("pre.rv-json");
+  await expect(raw).toHaveJSProperty("open", false);
+
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(raw).toHaveJSProperty("open", true);
+  await expect(raw.getByRole("heading", { name: "Before" })).toBeVisible();
+  await expect(raw.getByRole("heading", { name: "After" })).toBeVisible();
+  await expect(blocks).toHaveCount(2);
+  expect(await blocks.nth(0).textContent()).toBe(JSON.stringify(rawBefore, null, 2));
+  expect(await blocks.nth(1).textContent()).toBe(JSON.stringify(rawAfter, null, 2));
+  await expect(blocks.nth(0)).toContainText('"Fax": null');
+  await expect(blocks.nth(0)).toContainText('"Notes": ""');
+  await expect(blocks.nth(0)).toContainText('"Balance": 0');
+  await expect(blocks.nth(0)).toContainText('"Taxable": false');
+  await expect(blocks.nth(0)).toContainText("<script>window.__rawInjected = true</script>");
+  await expect(blocks.nth(1)).toContainText(JSON.stringify(rawAfter.Suffix).slice(1, -1));
+  await expect(raw.locator("script, img")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as { __rawInjected?: boolean }).__rawInjected)).toBeUndefined();
+
+  await page.keyboard.press("Enter");
+  await expect(raw).toHaveJSProperty("open", false);
+  await page.keyboard.press(" ");
+  await expect(raw).toHaveJSProperty("open", true);
+  expect(await blocks.nth(1).textContent()).toBe(JSON.stringify(rawAfter, null, 2));
+  await expect(summary).toBeFocused();
+  await expect(harbor).toHaveAttribute("aria-current", "true");
+  expect(api.posts).toHaveLength(0);
+
+  // Read-only refetch of the same comparison through the existing query focus behavior.
+  const hitReads = () => api.requests.filter((request) => request === "GET /hits/hit-raw").length;
+  const reads = hitReads();
+  await page.clock.fastForward(31_000);
+  const refetched = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/hits/hit-raw",
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await refetched;
+  expect(hitReads()).toBeGreaterThan(reads);
+  await nextFrame(page);
+  await expect(raw).toHaveJSProperty("open", true);
+  expect(await blocks.nth(0).textContent()).toBe(JSON.stringify(rawBefore, null, 2));
+
+  await page.keyboard.press("j");
+  await expect(larkspur).toHaveAttribute("aria-current", "true");
+  await expect(earlier).toContainText("Only the raw source data changed since that decision");
+  await expect(earlier).not.toContainText("No field differences");
+  await expect(earlier).toContainText("Morgan Lee (morgan@example.test)");
+  await expect(raw).toHaveJSProperty("open", false);
+  await expect(summary).toContainText("Your record · Raw source data changed");
+  await expect(summary).toContainText("2 top-level fields differ");
+  await summary.click();
+  await expect(raw).toHaveJSProperty("open", true);
+  expect(await blocks.nth(0).textContent()).toBe(JSON.stringify(rawOnlyBefore, null, 2));
+  expect(await blocks.nth(1).textContent()).toBe(JSON.stringify(rawOnlyAfter, null, 2));
+
+  // Back to a cached pair: same component position, but its disclosure starts closed.
+  await page.keyboard.press("k");
+  await expect(harbor).toHaveAttribute("aria-current", "true");
+  await expect(earlier).toContainText("Your record · Party type");
+  await expect(raw).toHaveJSProperty("open", false);
+  expect(api.posts).toHaveLength(0);
+
+  const note = page.getByLabel("Decision note");
+  await note.fill("Synthetic raw change reviewed; j k f");
+  await expect(harbor).toHaveAttribute("aria-current", "true");
+  await page.getByRole("button", { name: /Escalate/ }).click();
+  await expect.poll(() => api.posts.length).toBe(1);
+  expect(api.posts[0]).toEqual({
+    id: "hit-raw",
+    body: { kind: "escalated", note: "Synthetic raw change reviewed; j k f" },
+    csrf: reviewer.csrf_token,
+  });
+  await expect(page.getByText(/Recorded .Escalated. for Harbor Freight Partners/)).toBeVisible();
+  await expect(larkspur).toHaveAttribute("aria-current", "true");
+});
+
+test("mocked 390px preview keeps the raw disclosure compact, bounded and on screen", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const api = await mockReview(page, [rawHit()]);
+  await page.goto("/queue");
+  const earlier = earlierRegion(page);
+  const raw = earlier.locator("details.rv-raw");
+  await expect(earlier).toContainText("Different registry number and city.");
+  await expect(raw).toHaveJSProperty("open", false);
+  await expect(clearButton(page)).toBeEnabled();
+  expect(await fitsScreen(page)).toBe(true);
+  await capture(page, testInfo.outputPath("mocked-review-raw-disclosure-mobile-390.png"));
+
+  await raw.locator(":scope > summary").click();
+  const before = raw.locator("pre.rv-json").first();
+  await expect(before).toBeVisible();
+  const box = await before.evaluate((element) => ({
+    client: element.clientHeight,
+    scroll: element.scrollHeight,
+  }));
+  expect(box.client).toBeLessThanOrEqual(400);
+  expect(box.scroll).toBeGreaterThan(box.client);
+  expect(await fitsScreen(page)).toBe(true);
+  expect(api.posts).toHaveLength(0);
+});

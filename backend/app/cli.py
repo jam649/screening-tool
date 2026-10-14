@@ -1,19 +1,20 @@
 import json
-import shutil
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, cast
 
 import typer
+from sqlalchemy import inspect
 
 from app.config import Config
 from app.csl.parser import HASH_RULE_VERSION
 from app.csl.service import version_payload
 from app.database import create_database_engine, migrate, session_factory
 from app.models import CSLVersion, ScreeningRun
+from app.private_artifacts import require_new_destination, write_private_artifact
 from app.retention.service import purge_plan
-from app.scheduler.service import register_default_connectors, run_operation
+from app.scheduler.service import dispatch_pending, register_default_connectors, run_operation
 from app.screening.engine import (
     run_payload,
 )
@@ -28,12 +29,34 @@ def main():
     """screening-tool operator commands."""
 
 
+def _migrate_with_key_binding(engine, config):
+    """Reject a wrong bound key before schema changes; bind a fresh schema afterward."""
+    if inspect(engine).has_table("settings"):
+        with session_factory(engine, config)() as db:
+            validate_key_binding(db, config, bind=False)
+    migrate(engine)
+    with session_factory(engine, config)() as db:
+        validate_key_binding(db, config)
+
+
 @cli.command()
 def init():
     """Migrate the database; create the first Admin in the browser setup wizard."""
-    engine = create_database_engine(Config())
-    migrate(engine)
-    engine.dispose()
+    engine = None
+    try:
+        config = Config()
+        engine = create_database_engine(config)
+        _migrate_with_key_binding(engine, config)
+    except Exception:
+        typer.echo(
+            "Database initialization failed; check the original encryption key, "
+            "configuration and database permissions.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    finally:
+        if engine is not None:
+            engine.dispose()
     typer.echo("Database ready. Open the app to create the first Admin.")
 
 
@@ -50,9 +73,8 @@ def hashes_upgrade():
     config = Config()
     engine = create_database_engine(config)
     try:
-        migrate(engine)
+        _migrate_with_key_binding(engine, config)
         with session_factory(engine, config)() as db:
-            validate_key_binding(db, config)
             result = upgrade_hash_rules(db)
             typer.echo(json.dumps({"hash_rule_version": HASH_RULE_VERSION, **asdict(result)}))
     except ValueError as exc:
@@ -67,11 +89,9 @@ def operator_database():
     config = Config()
     engine = create_database_engine(config)
     try:
-        migrate(engine)
+        _migrate_with_key_binding(engine, config)
         factory = session_factory(engine, config)
         register_default_connectors()
-        with factory() as db:
-            validate_key_binding(db, config)
         yield config, factory
     finally:
         engine.dispose()
@@ -149,6 +169,8 @@ cli.add_typer(report_cli, name="report")
 cli.add_typer(alert_cli, name="alert")
 cli.add_typer(retention_cli, name="retention")
 cli.add_typer(monitor_cli, name="monitor")
+bc_cli = typer.Typer(help="Operate Business Central subscription maintenance.")
+cli.add_typer(bc_cli, name="bc")
 
 
 def print_operation(operation, **kwargs):
@@ -202,6 +224,35 @@ def monitor_cycle(
     print_operation("monitor_cycle", csl_file=file)
 
 
+@bc_cli.command("subscriptions")
+def bc_subscriptions(source: Annotated[str, typer.Argument(help="Business Central source UUID.")]):
+    """Run the same fenced subscription reconciliation as the 12-hour schedule."""
+    print_operation("bc_subscriptions", source_id=source)
+
+
+@monitor_cli.command("recover")
+def monitor_recover():
+    """Recover stopped owners and dispatch queued operations with their frozen inputs."""
+    with operator_database() as (config, factory):
+        results = dispatch_pending(factory, config)
+        failed = sum(row["status"] not in {"success", "queued", "running"} for row in results)
+        pending = sum(row["status"] in {"queued", "running"} for row in results)
+        typer.echo(
+            json.dumps(
+                {
+                    "operation": "dispatch_pending",
+                    "attempts": results,
+                    "completed": sum(row["status"] == "success" for row in results),
+                    "failed": failed,
+                    "pending": pending,
+                },
+                default=str,
+            )
+        )
+        if failed or pending:
+            raise typer.Exit(1)
+
+
 export_cli = typer.Typer(help="Download original recorded evidence; always choose an output path.")
 cli.add_typer(export_cli, name="export")
 
@@ -213,7 +264,10 @@ def export_evidence(
     run: Annotated[str | None, typer.Option(help="Export one screening run UUID.")] = None,
     all: Annotated[bool, typer.Option("--all", help="Export the complete audit ZIP.")] = False,
     format: Annotated[str, typer.Option(help="pdf, csv, or zip for --all.")] = "pdf",
-    output: Annotated[Path | None, typer.Option(help="Explicit destination file.")] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(help="New destination file; existing files are never overwritten."),
+    ] = None,
 ):
     if ctx.invoked_subcommand is not None:
         return
@@ -225,6 +279,7 @@ def export_evidence(
 
     artifact = None
     try:
+        require_new_destination(output)
         with operator_database() as (_, factory):
             with factory() as db:
                 if all:
@@ -234,17 +289,24 @@ def export_evidence(
                 else:
                     assert run is not None
                     artifact = export_run(db, run, cast(Format, format))
-                output.parent.mkdir(parents=True, exist_ok=True)
-                if artifact.body is not None:
-                    output.write_bytes(artifact.body)
-                else:
-                    assert artifact.path is not None
-                    shutil.copyfile(artifact.path, output)
+                write_private_artifact(artifact, output)
                 typer.echo(
                     json.dumps(
-                        {"output": str(output), "sha256": artifact.sha256, "size": artifact.size}
+                        {
+                            "output": str(output),
+                            "sha256": artifact.sha256,
+                            "size": artifact.size,
+                        }
                     )
                 )
+    except FileExistsError:
+        typer.echo("Destination already exists; choose a new output path.", err=True)
+        raise typer.Exit(1) from None
+    except (OSError, ValueError):
+        typer.echo(
+            "Export failed; check the record and choose a new writable output path.", err=True
+        )
+        raise typer.Exit(1) from None
     finally:
         if artifact is not None:
             artifact.close()
@@ -252,24 +314,40 @@ def export_evidence(
 
 @export_cli.command("training-pairs")
 def export_training_pairs_cli(
-    output: Annotated[Path, typer.Option(help="Explicit destination for human training-pair CSV.")],
+    output: Annotated[
+        Path,
+        typer.Option(
+            help="New destination for human training-pair CSV; never overwrites existing files."
+        ),
+    ],
 ):
     """Export retained human labels and their original immutable comparison snapshots."""
     from app.reports.training import export_training_pairs
 
     artifact = None
     try:
+        require_new_destination(output)
         with operator_database() as (_, factory):
             with factory() as db:
                 artifact = export_training_pairs(db)
-                output.parent.mkdir(parents=True, exist_ok=True)
-                assert artifact.body is not None
-                output.write_bytes(artifact.body)
+                write_private_artifact(artifact, output)
                 typer.echo(
                     json.dumps(
-                        {"output": str(output), "sha256": artifact.sha256, "size": artifact.size}
+                        {
+                            "output": str(output),
+                            "sha256": artifact.sha256,
+                            "size": artifact.size,
+                        }
                     )
                 )
+    except FileExistsError:
+        typer.echo("Destination already exists; choose a new output path.", err=True)
+        raise typer.Exit(1) from None
+    except (OSError, ValueError):
+        typer.echo(
+            "Export failed; check the record and choose a new writable output path.", err=True
+        )
+        raise typer.Exit(1) from None
     finally:
         if artifact is not None:
             artifact.close()

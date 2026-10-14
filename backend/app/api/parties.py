@@ -25,6 +25,7 @@ from app.models import (
 from app.reports.metrics import (
     auto_clear_observations,
     current_screening_coverage,
+    latest_current_screenings,
     party_screenings,
 )
 from app.retention.service import purged_run_evidence
@@ -51,8 +52,8 @@ def source_payload(source: Source | None):
 
 def party_rows(db: Session):
     queue_parties = {hit.party_id for hit in queue_hits(db)}
-    histories = party_screenings(db)
-    coverage = current_screening_coverage(db, histories)
+    latest_screenings = latest_current_screenings(db)
+    coverage = current_screening_coverage(db)
     entries = {entry.id: entry for entry in db.scalars(select(CSLEntry))}
     current = {p.id: p for p in db.scalars(select(Party))}
     confirmed = set()
@@ -111,16 +112,7 @@ def party_rows(db: Session):
     sources = {s.id: s for s in db.scalars(select(Source))}
     result = []
     for party in current.values():
-        runs = histories.get(party.id, [])
-        last = next(
-            (
-                r
-                for r in runs
-                if (r.settings_snapshot.get("scope") or {}).get("party_hashes", {}).get(party.id)
-                == party.record_hash
-            ),
-            None,
-        )
+        last_screened_at = latest_screenings.get(party.id)
         status = (
             "deleted"
             if party.deleted_at
@@ -140,11 +132,12 @@ def party_rows(db: Session):
             {
                 **snapshot(party),
                 "source": source_payload(sources.get(party.source_id)),
-                "last_screened_at": last.finished_at if last else None,
+                "last_screened_at": last_screened_at,
                 "status": status,
                 "screened_current": coverage.get(party.id, False),
                 "suppressed_pairings": suppressed.get(party.id, 0),
-                "stale": last is None or last.finished_at < utcnow() - timedelta(hours=24),
+                "stale": last_screened_at is None
+                or last_screened_at < utcnow() - timedelta(hours=24),
                 "auto_cleared": party.id in auto_cleared,
             }
         )
@@ -241,14 +234,17 @@ def party_file(party_id: str, user: CurrentUser, db: DB):
     by_run: dict[str, list[Hit]] = {}
     for hit in hits:
         by_run.setdefault(hit.run_id, []).append(hit)
-    runs = party_screenings(db).get(party.id, [])
+    runs = party_screenings(db, party_id=party.id).get(party.id, [])
     purged = purged_run_evidence(db, party.id)
     participation = {
         row.run_id: row
         for row in db.scalars(select(RunPartyEvidence).where(RunPartyEvidence.party_id == party.id))
     }
     events = []
+    run_ids, version_ids = set(), set()
     for run in runs:
+        run_ids.add(run.id)
+        version_ids.add(run.csl_version_id)
         observations = by_run.get(run.id, [])
         suppressed = [h for h in observations if h.status == "suppressed"]
         evidence = participation.get(run.id)
@@ -288,8 +284,8 @@ def party_file(party_id: str, user: CurrentUser, db: DB):
         party.source_id,
         *(h.id for h in hits),
         *(h.csl_entry_id for h in hits),
-        *(run.id for run in runs),
-        *(run.csl_version_id for run in runs),
+        *run_ids,
+        *version_ids,
     }
     ids.update(
         db.scalars(select(Disposition.id).where(Disposition.hit_id.in_([h.id for h in hits])))
@@ -302,17 +298,13 @@ def party_file(party_id: str, user: CurrentUser, db: DB):
             ids.add(row["hit"]["csl_entry_id"])
             ids.update(decision["id"] for decision in row["dispositions"])
     ids.update(row.id for row in participation.values())
-    ids.update(
-        db.scalars(
-            select(CSLFetch.id).where(CSLFetch.version_id.in_([run.csl_version_id for run in runs]))
-        )
-    )
+    ids.update(db.scalars(select(CSLFetch.id).where(CSLFetch.version_id.in_(version_ids))))
     # Task completion is the recorded link from requested scope to actual run.
     ids.update(
         db.scalars(
             select(AuditLog.target_id).where(
                 AuditLog.target_table == "screening_tasks",
-                AuditLog.after["run_id"].as_string().in_([run.id for run in runs]),
+                AuditLog.after["run_id"].as_string().in_(run_ids),
             )
         )
     )

@@ -1,0 +1,9 @@
+# Test server only: the production Compose service does not mount or enable this.
+# Use a fresh named Compose project; never reset a user's application data.
+services:
+  screening-tool:
+    command: ["python", "/tmp/qbo.py", "--serve-fixture"]
+    environment:
+      SCREENING_TOOL_DATABASE_URL: sqlite:////data/milestone6-fixture.db
+    volumes:
+      - ./tests/integration/qbo.py:/tmp/qbo.py:ro

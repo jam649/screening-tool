@@ -209,7 +209,7 @@ def test_likely_alerts_include_repeats_and_suppression(client, admin):
         )
         db.add(party)
         db.commit()
-        first = run_screening(db)
+        first_run_id = run_screening(db).id
         run_screening(db)
         from app.screening.engine import queue_hits
 
@@ -236,7 +236,7 @@ def test_likely_alerts_include_repeats_and_suppression(client, admin):
         assert len(payload["observation_ids"]) == 1
         assert "suppressed observation" in payload["text"] and "Administrator" in payload["text"]
         assert "Fixture prior decision" in payload["text"]
-        assert batch.run_id != first.id
+        assert batch.run_id != first_run_id
 
 
 def test_real_loopback_smtp_mime_alternatives_and_tls_fail_closed(client, admin):

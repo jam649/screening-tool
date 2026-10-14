@@ -1,0 +1,15 @@
+{
+  "capture_bytes": 33844180,
+  "capture_entries": 26128,
+  "capture_sha256": "fd63c5fcfbe921972ef691785c4dd4573a783ec7425787270b25e399f2b889e3",
+  "compressed_bytes": 3867817,
+  "compressed_sha256": "481926d9b01ec4ffa76cf2bbb85a9d276d8a65a08882b2bc9fab41a244f10012",
+  "data_kind": "Unmodified public United States government CSL rows; no customer records",
+  "original_sample_entries": 300,
+  "seed": 20261014,
+  "selection": "Original 300 in frozen order, then SHA-256 rank of JSON [seed, source_list, csl_id]",
+  "source_url": "https://data.trade.gov/downloadable_consolidated_screening_list/v1/consolidated.json",
+  "subset_bytes": 30397242,
+  "subset_entries": 25000,
+  "subset_sha256": "de8a537f8318d9b52f2499421ec696f13f09548d798113caea1298b90471e388"
+}

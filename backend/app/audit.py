@@ -116,6 +116,9 @@ def audit(
 
 
 def _safe(value: Any) -> Any:
+    # Exact immutable primitives need no copy; containers and custom types still do.
+    if type(value) in (str, int, float, bool, type(None)):
+        return value
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, dict):
@@ -147,16 +150,18 @@ def public_model_measurement(key: str, value: Any) -> bool:
     return False
 
 
+def _credential_key(key: str) -> bool:
+    normalized = "".join(character for character in key.casefold() if character.isalnum())
+    return any(marker in normalized for marker in SECRET_KEY_MARKERS)
+
+
 def redact_credentials(value: Any) -> Any:
     """Remove credential-bearing fields at every level of connector configuration."""
     if isinstance(value, dict):
         return {
             key: (
                 "[redacted]"
-                if any(
-                    marker in "".join(c for c in key.casefold() if c.isalnum())
-                    for marker in SECRET_KEY_MARKERS
-                )
+                if _credential_key(key)
                 and not public_model_measurement(key, item)
                 and not (
                     key in {"token_set", "token_sort"}
@@ -364,11 +369,15 @@ def protect_and_audit(db: Session, flush_context, instances):
         if isinstance(obj, Hit) and obj.status not in {None, "open", "suppressed"}:
             raise ImmutableAuditError("New hits must be open or have remembered suppression")
     tracked = (User, Source, Setting, Disposition, Party, Suppression, Hit)
-    for obj in list(db.new) + list(db.dirty) + list(db.deleted):
+    # Session.new constructs an IdentitySet on every access. Capture the same
+    # initial membership once while auditing this batch; audit rows are untracked.
+    new_rows, deleted_rows = list(db.new), list(db.deleted)
+    new_objects, deleted_objects = set(new_rows), set(deleted_rows)
+    for obj in new_rows + list(db.dirty) + deleted_rows:
         if not isinstance(obj, tracked):
             continue
-        is_new = obj in db.new
-        if not is_new and obj not in db.deleted and not db.is_modified(obj):
+        is_new = obj in new_objects
+        if not is_new and obj not in deleted_objects and not db.is_modified(obj):
             continue
         if is_new and obj.id is None:
             obj.id = str(uuid4())
@@ -381,16 +390,16 @@ def protect_and_audit(db: Session, flush_context, instances):
                     )
                 if obj.kind in {"confirmed_match", "escalated"} and not obj.note.strip():
                     raise ValueError("Confirmed matches and escalations require a note")
-        elif obj not in db.deleted:
+        elif obj not in deleted_objects:
             _apply_update_defaults(obj)
-        action = "create" if is_new else "delete" if obj in db.deleted else "update"
+        action = "create" if is_new else "delete" if obj in deleted_objects else "update"
         audit(
             db,
             f"{obj.__tablename__}.{action}",
             obj.__tablename__,
             obj.id,
             before=None if is_new else _snapshot(obj, before=True),
-            after=None if obj in db.deleted else _snapshot(obj),
+            after=None if obj in deleted_objects else _snapshot(obj),
         )
 
 

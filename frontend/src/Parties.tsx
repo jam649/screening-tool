@@ -313,6 +313,12 @@ function outcome(hit: HitDetail) {
 }
 
 function HitRecord({ hit }: { hit: HitDetail }) {
+  const recordedAnchor = hit.explanation.queue_anchor_hit_id;
+  const queueTarget = typeof recordedAnchor === "string" && recordedAnchor.trim()
+    ? recordedAnchor
+    : hit.id;
+  const unresolved = hit.status === "open" && hit.bucket !== "low"
+    && !hit.completed_disposition && !hit.suppression_disposition && hit.dispositions.length === 0;
   return (
     <details className="rv-hit">
       <summary>
@@ -328,8 +334,8 @@ function HitRecord({ hit }: { hit: HitDetail }) {
         </span>
       </summary>
       <div className="rv-hit-body">
-        {hit.status === "open" && hit.bucket !== "low" && (
-          <Link className="text-link" to={`/queue?hit=${encodeURIComponent(hit.id)}`}>
+        {unresolved && (
+          <Link className="text-link" to={`/queue?hit=${encodeURIComponent(queueTarget)}`}>
             Find in the review queue
           </Link>
         )}

@@ -43,7 +43,13 @@ class ScoredPair:
     explanation: dict[str, Any]
 
 
-def score_pair(party: Any, entry: Any, settings: ScreeningSettings) -> ScoredPair:
+def score_pair(
+    party: Any,
+    entry: Any,
+    settings: ScreeningSettings,
+    *,
+    explanation_minimum: float | None = None,
+) -> ScoredPair:
     party_names, entry_names = (
         names(party, settings, party=True),
         names(entry, settings, party=False),
@@ -126,6 +132,10 @@ def score_pair(party: Any, entry: Any, settings: ScreeningSettings) -> ScoredPai
         ),
         4,
     )
+    # Every candidate is fully scored. Below-cutoff comparisons are never
+    # persisted, so the engine can skip constructing their unused evidence.
+    if explanation_minimum is not None and final < explanation_minimum:
+        return ScoredPair(final, {})
     explanation = {
         "components": components,
         "matched_tokens": {

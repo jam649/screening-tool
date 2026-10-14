@@ -232,6 +232,18 @@ h4 {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.rv-raw {
+  margin: 8px 0 0;
+}
+.rv-raw > summary .rv-muted {
+  font-weight: 400;
+}
+.rv-raw h5 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 10px 0 4px;
+}
 .rv-before {
   text-decoration: line-through;
   color: #7a5a17;

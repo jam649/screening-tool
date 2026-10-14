@@ -10,6 +10,7 @@ services:
       SCREENING_TOOL_ALLOWED_HOSTS: '${SCREENING_TOOL_ALLOWED_HOSTS:-["localhost","127.0.0.1","::1"]}'
       SCREENING_TOOL_ALLOWED_ORIGINS: '${SCREENING_TOOL_ALLOWED_ORIGINS:-[]}'
       TZ: ${TZ:-UTC}
+      FORWARDED_ALLOW_IPS: ${SCREENING_TOOL_FORWARDED_ALLOW_IPS:-127.0.0.1,::1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -17,7 +18,7 @@ services:
     restart: unless-stopped
     init: true
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
+      test: ["CMD", "python", "-m", "app.healthcheck"]
       interval: 30s
       timeout: 10s
       start_period: 30s

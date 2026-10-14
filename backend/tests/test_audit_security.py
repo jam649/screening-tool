@@ -381,3 +381,86 @@ def test_new_run_can_complete_once_when_nullable_finish_attribute_was_unset(app,
         with pytest.raises(ImmutableAuditError, match="Completed screening run"):
             db.commit()
         db.rollback()
+
+
+def test_batched_source_audit_preserves_every_original_row_and_mixed_changes(app, admin):
+    with app.state.session_factory() as db:
+        db.info["actor_user_id"] = admin["user"]["id"]
+        sources = [
+            Source(
+                kind="csv",
+                label=f"Synthetic batch {number}",
+                config={
+                    "nested": {"API-Key": "synthetic-private", "values": [number, False, None]}
+                },
+            )
+            for number in range(30)
+        ]
+        db.add_all(sources)
+        db.flush()
+        originals = {
+            row.target_id: row
+            for row in db.scalars(
+                select(AuditLog).where(
+                    AuditLog.target_id.in_([source.id for source in sources]),
+                    AuditLog.action == "sources.create",
+                )
+            )
+        }
+        assert len(originals) == 30
+        for number, source in enumerate(sources):
+            original = originals[source.id]
+            assert original.actor_user_id == admin["user"]["id"]
+            assert original.after["label"] == f"Synthetic batch {number}"
+            assert original.after["config"] == {
+                "nested": {"API-Key": "[redacted]", "values": [number, False, None]}
+            }
+            assert original.after["created_at"] == source.created_at.isoformat()
+        changed, removed = sources[:2]
+        removed_id = removed.id
+        changed.label = "Synthetic renamed batch"
+        db.delete(removed)
+        added = Source(kind="csv", label="Synthetic added batch")
+        db.add(added)
+        db.commit()
+        assert originals[changed.id].after["label"] == "Synthetic batch 0"
+        assert originals[removed_id].after["label"] == "Synthetic batch 1"
+        changes = list(
+            db.scalars(
+                select(AuditLog).where(AuditLog.target_id.in_([changed.id, removed_id, added.id]))
+            )
+        )
+        assert len(changes) == 5
+        updated = next(row for row in changes if row.action == "sources.update")
+        deleted = next(row for row in changes if row.action == "sources.delete")
+        assert updated.before["label"] == "Synthetic batch 0"
+        assert updated.after["label"] == "Synthetic renamed batch"
+        assert deleted.before["label"] == "Synthetic batch 1" and deleted.after is None
+        assert all(row.actor_user_id == admin["user"]["id"] for row in changes)
+
+
+def test_recursive_redaction_preserves_typed_measurements_and_independent_values():
+    from datetime import UTC, datetime
+
+    from app.audit import redact_credentials
+
+    timestamp = datetime(2026, 10, 14, tzinfo=UTC)
+    original = {
+        "nested": [
+            {"CLIENT-State": "synthetic-private", "input_tokens": 12, "output_tokens": None},
+            {"input_tokens": "12", "token_set": 0.5, "token_sort": False},
+            {"ordinary": [0, False, None, "", timestamp]},
+        ]
+    }
+    retained = redact_credentials(original)
+    assert retained == {
+        "nested": [
+            {"CLIENT-State": "[redacted]", "input_tokens": 12, "output_tokens": None},
+            {"input_tokens": "[redacted]", "token_set": 0.5, "token_sort": "[redacted]"},
+            {"ordinary": [0, False, None, "", timestamp.isoformat()]},
+        ]
+    }
+    original["nested"][2]["ordinary"].append("later mutation")
+    original["nested"][0]["input_tokens"] = 99
+    assert retained["nested"][2]["ordinary"] == [0, False, None, "", timestamp.isoformat()]
+    assert retained["nested"][0]["input_tokens"] == 12

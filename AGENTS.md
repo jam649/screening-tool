@@ -1,6 +1,6 @@
 # screening-tool
 
-Read `docs/design-v1.md`, the source of truth, and `docs/plans/implementation.md` for current execution decisions. Follow shared instructions in `/Users/jordanmallory/AGENTS.md` when present.
+Read `README.md` and the applicable public research and connector contracts under `docs/research/`. When present locally, the maintainer's `docs/design-v1.md` and `docs/plans/implementation.md` supply additional working context. Follow local shared agent instructions when provided by the maintainer.
 
 - Python 3.12, FastAPI, SQLite, SQLAlchemy/Alembic; React 18, Vite, TypeScript.
 - Deterministic matching works without AI. Jev and local Laya are optional adjudicators, never candidate generators.

@@ -439,3 +439,162 @@ test("zero-hit participation and purged comparisons display actual permanent sna
   await expect(retained).toContainText("Synthetic original assessment");
   await expect(retained).toContainText("certificate-synthetic");
 });
+
+test("party history inherits the compact raw disclosure with exact payloads, hashes and snapshots intact", async ({
+  page,
+}, testInfo) => {
+  // Clearly synthetic mocked raw source payloads.
+  const rawBefore = {
+    Id: "MOCK-NW-7",
+    DisplayName: "Northwind",
+    Balance: 0,
+    Fax: null,
+    Notes: "",
+    Taxable: false,
+    Memo: "<script>window.__rawInjected = true</script>",
+    Ledger: "Synthetic mocked ledger memo line. ".repeat(84),
+  };
+  const rawAfter = { ...rawBefore, DisplayName: "Northwind Trading", Ledger: `${rawBefore.Ledger}amended` };
+  const historic = {
+    ...suppressedHit,
+    id: "hit-raw-history",
+    status: "confirmed_match",
+    suppression_disposition: null,
+    dispositions: [
+      {
+        id: "decision-confirmed",
+        hit_id: "hit-raw-history",
+        kind: "confirmed_match",
+        actor_user_id: morgan.id,
+        actor: morgan,
+        note: "Synthetic confirmation after the raw change",
+        created_at: "2026-09-21T10:00:00Z",
+      },
+    ],
+    prior_disposition: {
+      ...suppressedHit.suppression_disposition,
+      what_changed: {
+        party: {
+          name: { before: "Northwind", after: "Northwind Trading" },
+          raw: { before: rawBefore, after: rawAfter },
+        },
+        entry: {},
+      },
+    },
+  };
+  const history = {
+    ...partyFile,
+    events: [
+      {
+        ...partyFile.events[0],
+        zero_hits: false,
+        hits: [historic],
+        previously_cleared: { count: 0, hits: [] },
+        party_evidence: {
+          party_snapshot: { name: "Historic snapshot name" },
+          source_snapshot: { label: "Historic source" },
+          candidates_considered: 1,
+          hits_recorded: 1,
+          result_counts: { review: 1 },
+        },
+      },
+    ],
+  };
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await mockApi(page, (path) => (path === "/parties/party-nw" ? history : undefined));
+  await page.goto("/parties/party-nw");
+  const event = page.locator("li.rv-event").first();
+  await expect(event).toContainText(CURRENT_HASH);
+  const preserved = event
+    .locator("details.rv-disclosure")
+    .filter({ has: page.locator(":scope > summary", { hasText: "Party record preserved for this run" }) });
+  await expect(preserved).toHaveJSProperty("open", false);
+  const observation = event.locator("details.rv-hit");
+  await expect(observation).toHaveJSProperty("open", false);
+  await observation.locator(":scope > summary").click();
+
+  const earlier = observation.getByRole("region", { name: "Earlier decision on this pairing" });
+  await expect(earlier).toContainText("Morgan Lee (morgan@example.test)");
+  await expect(earlier).toContainText("Registered in a different country; not the listed entity.");
+  await expect(earlier.locator(".rv-changes")).toContainText("Your record · Name");
+  await expect(earlier.locator(".rv-changes")).toContainText("Northwind Trading");
+  const raw = earlier.locator("details.rv-raw");
+  const summary = raw.locator(":scope > summary");
+  await expect(raw).toHaveJSProperty("open", false);
+  await expect(summary).toContainText("Your record · Raw source data changed");
+  await expect(summary).toContainText("2 top-level fields differ");
+  expect(await earlier.innerText()).not.toContain("Synthetic mocked ledger memo");
+  await expect(
+    observation.getByRole("region", { name: "Decisions on this comparison" }),
+  ).toContainText("Synthetic confirmation after the raw change");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+  );
+  await page.screenshot({
+    path: testInfo.outputPath("mocked-party-raw-history-desktop-1440x950.png"),
+    fullPage: true,
+  });
+
+  await summary.click();
+  await expect(raw).toHaveJSProperty("open", true);
+  const blocks = raw.locator("pre.rv-json");
+  expect(await blocks.nth(0).textContent()).toBe(JSON.stringify(rawBefore, null, 2));
+  expect(await blocks.nth(1).textContent()).toBe(JSON.stringify(rawAfter, null, 2));
+  await expect(raw.locator("script")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as { __rawInjected?: boolean }).__rawInjected)).toBeUndefined();
+
+  const table = observation.getByRole("table", { name: "Recorded at screening time" });
+  await expect(table).toContainText("Northwind Trading");
+  await expect(table).not.toContainText("Northwind Trading Co");
+  await observation.getByText("Provenance", { exact: true }).click();
+  await expect(observation).toContainText(OLD_HASH);
+  await expect(observation).toContainText("e".repeat(64));
+  await preserved.locator(":scope > summary").click();
+  await expect(preserved).toContainText("Historic snapshot name");
+  await expect(preserved).toContainText("Historic source");
+});
+
+
+test("party history links unresolved repeats to their queue anchor and never offers resolved observations as work", async ({ page }) => {
+  const human = suppressedHit.suppression_disposition;
+  const repeated = {
+    ...suppressedHit, id: "hit-unresolved-repeat", status: "open", suppression_disposition: null,
+    explanation: { ...suppressedHit.explanation, queue_anchor_hit_id: "hit-current-anchor" },
+  };
+  const completed = {
+    ...repeated, id: "hit-completed-repeat",
+    completed_disposition: { ...human, kind: "confirmed_match", note: "Synthetic original confirmed assessment" },
+  };
+  const directlyDecided = {
+    ...repeated, id: "hit-direct-human", dispositions: [human],
+  };
+  const belowCutoff = { ...repeated, id: "hit-below-cutoff", bucket: "low" };
+  const legacy = {
+    ...repeated, id: "hit-legacy-unresolved",
+    explanation: { ...suppressedHit.explanation, queue_anchor_hit_id: { invalid: "shape" } },
+  };
+  const observations = [repeated, completed, directlyDecided, belowCutoff, suppressedHit, legacy];
+  const history = {
+    ...partyFile,
+    events: [{ ...partyFile.events[0], zero_hits: false, hits: observations, previously_cleared: { count: 0, hits: [] } }],
+  };
+  await mockApi(page, path => path === "/parties/party-nw" ? history : undefined);
+  await page.goto("/parties/party-nw");
+  const records = page.locator("details.rv-hit");
+  await expect(records).toHaveCount(observations.length);
+  for (let index = 0; index < observations.length; index++)
+    await records.nth(index).locator(":scope > summary").click();
+  const findQueue = (index: number) => records.nth(index).getByRole("link", { name: "Find in the review queue" });
+  await expect(findQueue(0)).toHaveAttribute("href", "/queue?hit=hit-current-anchor");
+  await expect(findQueue(5)).toHaveAttribute("href", "/queue?hit=hit-legacy-unresolved");
+  for (const index of [1, 2, 3, 4]) await expect(findQueue(index)).toHaveCount(0);
+  const retained = records.nth(1).getByRole("region", { name: "Previous human decision retained" });
+  await expect(retained).toContainText("Morgan Lee (morgan@example.test)");
+  await expect(retained).toContainText(completed.completed_disposition.note);
+  const table = records.nth(0).getByRole("table", { name: "Recorded at screening time" });
+  await expect(table).toContainText("Northwind Trading");
+  await expect(table).not.toContainText("Northwind Trading Co");
+  await records.nth(0).getByText("Provenance", { exact: true }).click();
+  await expect(records.nth(0)).toContainText(OLD_HASH);
+});

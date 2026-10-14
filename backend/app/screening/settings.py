@@ -119,7 +119,7 @@ class ScreeningSettings:
                 raise ScreeningValidationError(f"{key} must contain nonempty strings")
 
     def snapshot(self) -> dict[str, Any]:
-        return redact_credentials(asdict(self))
+        return {**redact_credentials(asdict(self)), "matching_policy_version": 2}
 
     def scoring_snapshot(self) -> dict[str, Any]:
         return {key: value for key, value in self.snapshot().items() if key not in AUTO_CLEAR_KEYS}

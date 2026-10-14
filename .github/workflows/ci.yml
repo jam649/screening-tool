@@ -10,10 +10,12 @@ concurrency:
   cancel-in-progress: true
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.11.31"
           python-version: "3.12"
@@ -21,18 +23,20 @@ jobs:
       - working-directory: backend
         run: uv sync --frozen --extra dev
       - working-directory: backend
-        run: uv run ruff check . ../scripts/gates
+        run: uv run ruff check . ../tests/integration ../scripts/research
       - working-directory: backend
         run: uv run mypy app
       - working-directory: backend
-        run: uv run pytest
+        run: uv run pytest -c pyproject.toml tests ../scripts/research/test_compare_adjudicators.py
       - working-directory: backend
         run: uv run pip-audit
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -48,10 +52,12 @@ jobs:
       - working-directory: frontend
         run: npm audit
   compose-first-run:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -70,10 +76,12 @@ jobs:
       - if: always()
         run: docker compose down
   compose-csv-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -102,10 +110,12 @@ jobs:
         run: docker compose -p screening-tool-fixture-gates down --volumes
 
   compose-monitoring-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -123,13 +133,13 @@ jobs:
         run: npm test -- tests/real-csv.spec.ts --workers=1
       - name: Verify the real monitoring, email and evidence cycle
         run: |
-          docker cp scripts/gates/milestone5.py screening-tool-monitoring-fixture-screening-tool-1:/tmp/milestone5.py
-          docker exec screening-tool-monitoring-fixture-screening-tool-1 python /tmp/milestone5.py --run-fixture-gate
+          docker cp tests/integration/monitoring.py screening-tool-monitoring-fixture-screening-tool-1:/tmp/monitoring.py
+          docker exec screening-tool-monitoring-fixture-screening-tool-1 python /tmp/monitoring.py --run-fixture-gate
       - name: Restart and verify persistent schedules and original evidence
         run: |
           docker restart screening-tool-monitoring-fixture-screening-tool-1
-          docker cp scripts/gates/milestone5_restart.py screening-tool-monitoring-fixture-screening-tool-1:/tmp/milestone5_restart.py
-          docker exec screening-tool-monitoring-fixture-screening-tool-1 python /tmp/milestone5_restart.py --run-fixture-gate
+          docker cp tests/integration/monitoring_restart.py screening-tool-monitoring-fixture-screening-tool-1:/tmp/monitoring_restart.py
+          docker exec screening-tool-monitoring-fixture-screening-tool-1 python /tmp/monitoring_restart.py --run-fixture-gate
       - name: Start anonymous loopback SMTP capture for the browser
         run: docker exec -d screening-tool-monitoring-fixture-screening-tool-1 python -m app.notifications.fixture --port 2525 --output-dir /data/milestone5-browser-smtp
       - name: Verify real Admin controls, deliveries, downloads and protected retention
@@ -145,10 +155,12 @@ jobs:
         run: docker compose -p screening-tool-monitoring-fixture down --volumes
 
   compose-qbo-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -156,18 +168,18 @@ jobs:
       - name: Generate isolated fixture encryption key
         run: python3 -c 'import base64,secrets; from datetime import datetime,timezone; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()); print("TZ=Etc/GMT"+format(datetime.now(timezone.utc).hour-12, "+d"))' > .env
       - name: Start a fresh packaged fixture API
-        run: docker compose -f docker-compose.yml -f scripts/gates/milestone6-compose.yml -p screening-tool-qbo-api up --build -d --wait
+        run: docker compose -f docker-compose.yml -f tests/integration/qbo-compose.yml -p screening-tool-qbo-api up --build -d --wait
       - name: Verify real OAuth, rotation, CDC, scoped evidence and export privacy
-        run: docker exec screening-tool-qbo-api-screening-tool-1 python /tmp/milestone6.py --run-fixture-gate
+        run: docker exec screening-tool-qbo-api-screening-tool-1 python /tmp/qbo.py --run-fixture-gate
       - name: Restart and verify frozen evidence and actual schedules
         run: |
           docker restart screening-tool-qbo-api-screening-tool-1
-          docker compose -f docker-compose.yml -f scripts/gates/milestone6-compose.yml -p screening-tool-qbo-api up -d --wait
-          docker exec screening-tool-qbo-api-screening-tool-1 python /tmp/milestone6.py --verify-restart
+          docker compose -f docker-compose.yml -f tests/integration/qbo-compose.yml -p screening-tool-qbo-api up -d --wait
+          docker exec screening-tool-qbo-api-screening-tool-1 python /tmp/qbo.py --verify-restart
       - name: Preserve the API volume and start a separate fresh browser fixture
         run: |
-          docker compose -f docker-compose.yml -f scripts/gates/milestone6-compose.yml -p screening-tool-qbo-api stop
-          docker compose -f docker-compose.yml -f scripts/gates/milestone6-compose.yml -p screening-tool-qbo-browser up --build -d --wait
+          docker compose -f docker-compose.yml -f tests/integration/qbo-compose.yml -p screening-tool-qbo-api stop
+          docker compose -f docker-compose.yml -f tests/integration/qbo-compose.yml -p screening-tool-qbo-browser up --build -d --wait
       - working-directory: frontend
         run: npm ci && npx playwright install --with-deps chromium
       - name: Work real QBO settings, sync, Reviewer history and revocation controls
@@ -178,18 +190,20 @@ jobs:
         run: npm test -- tests/real-qbo.spec.ts --workers=1
       - if: failure()
         run: |
-          docker compose -f docker-compose.yml -f scripts/gates/milestone6-compose.yml -p screening-tool-qbo-api logs --tail 100
-          docker compose -f docker-compose.yml -f scripts/gates/milestone6-compose.yml -p screening-tool-qbo-browser logs --tail 100
+          docker compose -f docker-compose.yml -f tests/integration/qbo-compose.yml -p screening-tool-qbo-api logs --tail 100
+          docker compose -f docker-compose.yml -f tests/integration/qbo-compose.yml -p screening-tool-qbo-browser logs --tail 100
       - if: always()
         run: |
-          docker compose -f docker-compose.yml -f scripts/gates/milestone6-compose.yml -p screening-tool-qbo-api down --volumes
-          docker compose -f docker-compose.yml -f scripts/gates/milestone6-compose.yml -p screening-tool-qbo-browser down --volumes
+          docker compose -f docker-compose.yml -f tests/integration/qbo-compose.yml -p screening-tool-qbo-api down --volumes
+          docker compose -f docker-compose.yml -f tests/integration/qbo-compose.yml -p screening-tool-qbo-browser down --volumes
 
   compose-bc-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -197,18 +211,18 @@ jobs:
       - name: Generate isolated fixture encryption key
         run: python3 -c 'import base64,secrets; from datetime import datetime,timezone; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()); print("TZ=Etc/GMT"+format(datetime.now(timezone.utc).hour-12, "+d"))' > .env
       - name: Start a fresh packaged BC fixture API
-        run: docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-api up --build -d --wait
+        run: docker compose -f docker-compose.yml -f tests/integration/bc-compose.yml -p screening-tool-bc-api up --build -d --wait
       - name: Verify company selection, actual callback TCP, subscriptions and immutable screening
-        run: docker exec screening-tool-bc-api-screening-tool-1 python /tmp/gates/milestone7.py --run-fixture-gate
+        run: docker exec screening-tool-bc-api-screening-tool-1 python /tmp/gates/bc.py --run-fixture-gate
       - name: Restart with retained encrypted provider state and original evidence
         run: |
           docker restart screening-tool-bc-api-screening-tool-1
-          docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-api up -d --wait
-          docker exec screening-tool-bc-api-screening-tool-1 python /tmp/gates/milestone7.py --verify-restart
+          docker compose -f docker-compose.yml -f tests/integration/bc-compose.yml -p screening-tool-bc-api up -d --wait
+          docker exec screening-tool-bc-api-screening-tool-1 python /tmp/gates/bc.py --verify-restart
       - name: Preserve API volume and start a separate fresh BC browser fixture
         run: |
-          docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-api stop
-          docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-browser up --build -d --wait
+          docker compose -f docker-compose.yml -f tests/integration/bc-compose.yml -p screening-tool-bc-api stop
+          docker compose -f docker-compose.yml -f tests/integration/bc-compose.yml -p screening-tool-bc-browser up --build -d --wait
       - working-directory: frontend
         run: npm ci && npx playwright install --with-deps chromium
       - name: Work native BC settings, company selection, Reviewer history and cleanup controls
@@ -219,18 +233,20 @@ jobs:
         run: npm test -- tests/real-bc.spec.ts --workers=1
       - if: failure()
         run: |
-          docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-api logs --tail 100
-          docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-browser logs --tail 100
+          docker compose -f docker-compose.yml -f tests/integration/bc-compose.yml -p screening-tool-bc-api logs --tail 100
+          docker compose -f docker-compose.yml -f tests/integration/bc-compose.yml -p screening-tool-bc-browser logs --tail 100
       - if: always()
         run: |
-          docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-api down --volumes
-          docker compose -f docker-compose.yml -f scripts/gates/milestone7-compose.yml -p screening-tool-bc-browser down --volumes
+          docker compose -f docker-compose.yml -f tests/integration/bc-compose.yml -p screening-tool-bc-api down --volumes
+          docker compose -f docker-compose.yml -f tests/integration/bc-compose.yml -p screening-tool-bc-browser down --volumes
 
   compose-model-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -238,18 +254,18 @@ jobs:
       - name: Generate isolated fixture encryption key
         run: python3 -c 'import base64,secrets; from datetime import datetime,timezone; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()); print("TZ=Etc/GMT"+format(datetime.now(timezone.utc).hour-12, "+d"))' > .env
       - name: Start a fresh packaged synthetic-provider API
-        run: docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api up --build -d --wait
+        run: docker compose -f docker-compose.yml -f tests/integration/models-compose.yml -p screening-tool-model-api up --build -d --wait
       - name: Verify model privacy, probability-zero rail, fallback and actual training CLI
-        run: docker exec screening-tool-model-api-screening-tool-1 python /tmp/gates/milestone8.py --run-fixture-gate
+        run: docker exec screening-tool-model-api-screening-tool-1 python /tmp/gates/models.py --run-fixture-gate
       - name: Restart with retained encrypted model settings and original human evidence
         run: |
           docker restart screening-tool-model-api-screening-tool-1
-          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api up -d --wait
-          docker exec screening-tool-model-api-screening-tool-1 python /tmp/gates/milestone8.py --verify-restart
+          docker compose -f docker-compose.yml -f tests/integration/models-compose.yml -p screening-tool-model-api up -d --wait
+          docker exec screening-tool-model-api-screening-tool-1 python /tmp/gates/models.py --verify-restart
       - name: Preserve API volume and start a separate fresh model browser fixture
         run: |
-          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api stop
-          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-browser up --build -d --wait
+          docker compose -f docker-compose.yml -f tests/integration/models-compose.yml -p screening-tool-model-api stop
+          docker compose -f docker-compose.yml -f tests/integration/models-compose.yml -p screening-tool-model-browser up --build -d --wait
       - working-directory: frontend
         run: npm ci && npx playwright install --with-deps chromium
       - name: Work native model settings, human history, key clearing and full ZIP privacy
@@ -260,9 +276,97 @@ jobs:
         run: npm test -- tests/real-model.spec.ts --workers=1
       - if: failure()
         run: |
-          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api logs --tail 100
-          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-browser logs --tail 100
+          docker compose -f docker-compose.yml -f tests/integration/models-compose.yml -p screening-tool-model-api logs --tail 100
+          docker compose -f docker-compose.yml -f tests/integration/models-compose.yml -p screening-tool-model-browser logs --tail 100
       - if: always()
         run: |
-          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-api down --volumes
-          docker compose -f docker-compose.yml -f scripts/gates/milestone8-compose.yml -p screening-tool-model-browser down --volumes
+          docker compose -f docker-compose.yml -f tests/integration/models-compose.yml -p screening-tool-model-api down --volumes
+          docker compose -f docker-compose.yml -f tests/integration/models-compose.yml -p screening-tool-model-browser down --volumes
+
+  compose-deployment-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate isolated deployment key
+        run: python3 -c 'import base64,secrets; from datetime import datetime,timezone; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()); print("TZ=Etc/GMT"+format(datetime.now(timezone.utc).hour-12, "+d"))' > .env
+      - name: Start a fresh production entry point with public-only Host policy
+        run: docker compose -f docker-compose.yml -f tests/integration/deployment-compose.yml -p screening-tool-deployment up --build -d --wait
+      - name: Send an actual untrusted network peer's synthetic forwarded address
+        run: |
+          image=$(docker inspect screening-tool-deployment-screening-tool-1 --format '{{.Config.Image}}')
+          docker run --name screening-tool-deployment-probe --network screening-tool-deployment_default --mount type=bind,source="$PWD/tests/integration",target=/tmp/gates,readonly --entrypoint python "$image" /tmp/gates/deployment.py --send-untrusted-probe > "$RUNNER_TEMP/deployment-probe.json"
+          python3 -c 'import json,os; from pathlib import Path; peer=json.loads(Path(os.environ["RUNNER_TEMP"]).joinpath("deployment-probe.json").read_text())["peer_ip"]; Path(os.environ["GITHUB_ENV"]).open("a").write("DEPLOYMENT_PROBE_PEER_IP="+peer+"\n")'
+      - name: Verify actual host/proxy trust, notices, key binding and private CLI exports
+        run: docker exec screening-tool-deployment-screening-tool-1 python /tmp/gates/deployment.py --run-fixture-gate --untrusted-peer-ip "$DEPLOYMENT_PROBE_PEER_IP"
+      - if: failure()
+        run: docker compose -f docker-compose.yml -f tests/integration/deployment-compose.yml -p screening-tool-deployment logs --tail 100
+      - if: always()
+        run: docker compose -f docker-compose.yml -f tests/integration/deployment-compose.yml -p screening-tool-deployment down --volumes
+
+  readme-install:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Record cold installation start before checkout
+        run: date +%s > "$RUNNER_TEMP/readme-install-started-at"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate the key exactly once using README instructions
+        run: |
+          (umask 077; set -o noclobber; docker run --rm python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258 python -c 'import base64,secrets; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())' > .env)
+          python3 -c 'from datetime import datetime,timezone; print("TZ=Etc/GMT"+format(datetime.now(timezone.utc).hour-12, "+d"))' >> .env
+      - name: Build and start a fresh README installation
+        run: docker compose -p screening-tool-readme up --build -d --wait
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Screen the documented demo through actual Admin setup and CSV controls
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:8000
+          SCREENING_TOOL_GATE_CONTAINER: screening-tool-readme-screening-tool-1
+          SCREENING_TOOL_GATE_ARTIFACT_PREFIX: milestone-9-readme
+        run: npm test -- tests/real-csv.spec.ts --workers=1
+      - name: Verify fresh runner installation reached screened CSV within fifteen minutes
+        run: |
+          python3 -c 'import json,os,time; from pathlib import Path; seconds=time.time()-int(Path(os.environ["RUNNER_TEMP"]).joinpath("readme-install-started-at").read_text()); print(json.dumps({"validation":"fresh-CI-runner-README-CSV-install","seconds":round(seconds,2),"limit_seconds":900,"passed":seconds<=900})); assert seconds<=900'
+      - if: failure()
+        run: docker compose -p screening-tool-readme logs --tail 100
+      - if: always()
+        run: docker compose -p screening-tool-readme down --volumes
+
+  matching-benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate a private synthetic benchmark key
+        run: (umask 077; python3 -c 'import base64,secrets; print("SCREENING_TOOL_SECRET_KEY="+base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())' > .env)
+      - name: Build the actual production image
+        run: docker build --tag screening-tool-matching-benchmark .
+      - name: Verify frozen recall labels through production candidates and scoring
+        run: docker run --rm --network none --env-file .env --env PYTHONPATH=/app/backend --mount type=bind,source="$PWD/tests/integration",target=/tmp/gates,readonly --entrypoint python screening-tool-matching-benchmark /tmp/gates/matching.py --recall
+      - name: Screen 20,000 synthetic parties against 25,000 public CSL rows twice
+        run: |
+          docker create --name screening-tool-matching-benchmark --cpus 2 --memory 4g --network none --env-file .env --env PYTHONPATH=/app/backend --mount type=volume,source=screening-tool-matching-benchmark-data,target=/data --mount type=bind,source="$PWD/tests/integration",target=/tmp/gates,readonly --entrypoint python screening-tool-matching-benchmark /tmp/gates/matching.py --fixture-benchmark --workspace /data/m9-main-20k-25k --parties 20000 --entries 25000 --allow-20k-fixture --seconds 600
+          docker inspect screening-tool-matching-benchmark --format '{"nano_cpus":{{.HostConfig.NanoCpus}},"memory_bytes":{{.HostConfig.Memory}},"network_mode":"{{.HostConfig.NetworkMode}}"}'
+          docker start --attach screening-tool-matching-benchmark
+          docker cp screening-tool-matching-benchmark:/data/m9-main-20k-25k/report.json "$RUNNER_TEMP/matching-benchmark.json"
+          python3 -c 'import json,os; from pathlib import Path; report=json.loads(Path(os.environ["RUNNER_TEMP"]).joinpath("matching-benchmark.json").read_text()); assert report["passed"] and report["parties"]==20000 and report["entries"]==25000 and len(report["runs"])==2; assert report["resource_targets"]["ten_minute_bound_met"] and report["resource_targets"]["process_peak_below_3gib"]; print(json.dumps({"validation":"constrained-20k-25k-cold-repeat","resource_targets":report["resource_targets"]},sort_keys=True))'
+      - name: Retain a safe benchmark checkpoint summary before CI fixture cleanup
+        if: always()
+        run: |
+          docker cp screening-tool-matching-benchmark:/data/m9-main-20k-25k/report.json "$RUNNER_TEMP/matching-benchmark-checkpoint.json" || true
+          python3 -c 'import json,os; from pathlib import Path; p=Path(os.environ["RUNNER_TEMP"]).joinpath("matching-benchmark-checkpoint.json"); report=json.loads(p.read_text()) if p.exists() else {}; print(json.dumps({"checkpoint_present":p.exists(),"passed":report.get("passed"),"failed_check":report.get("failed_check"),"resource_targets":report.get("resource_targets"),"runs":[{k:r.get(k) for k in ("name","seconds","engine_peak_rss_mib","full_gate_peak_rss_mib","operation_status")} for r in report.get("runs",[])]},sort_keys=True))'
+      - if: always()
+        run: |
+          docker rm -f screening-tool-matching-benchmark || true
+          docker volume rm screening-tool-matching-benchmark-data || true

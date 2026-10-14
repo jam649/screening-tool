@@ -343,3 +343,52 @@ def test_party_audit_includes_failed_explicit_scoped_work_without_fake_run(
     task_events = [row for row in file["audit_log"] if row["target_id"] == task_id]
     assert {row["action"] for row in task_events} == {"screening.enqueued", "screening.task_failed"}
     assert len(file["events"]) == 3  # no partial or invented failed screening run
+
+
+def test_party_views_do_not_load_unrelated_full_run_manifests(client, admin, review_seed):
+    from sqlalchemy import event
+
+    from app.models import ScreeningRun
+
+    original = client.get(f"/api/v1/parties/{review_seed['zero_id']}").json()
+    original_run_ids = {item["run"]["id"] for item in original["events"]}
+    unrelated_run_ids = set()
+    with client.app.state.session_factory() as db:
+        party = Party(
+            source_id=review_seed["source_id"],
+            external_id="unrelated-history",
+            name="Synthetic Unrelated History Company",
+            record_hash=party_record_hash({"name": "Synthetic Unrelated History Company"}),
+        )
+        db.add(party)
+        db.commit()
+        for _ in range(6):
+            unrelated_run_ids.add(run_screening(db, party_ids=[party.id]).id)
+    loaded_run_ids = set()
+
+    def record_full_run_load(run, context):
+        loaded_run_ids.add(run.id)
+
+    event.listen(ScreeningRun, "load", record_full_run_load)
+    try:
+        listed = client.get("/api/v1/parties").json()
+        assert listed["total"] == 3
+        target = next(row for row in listed["items"] if row["id"] == review_seed["zero_id"])
+        assert target["screened_current"] is True
+        assert target["last_screened_at"] == original["party"]["last_screened_at"]
+        assert target["stale"] is False
+        assert not loaded_run_ids
+
+        selected = client.get(f"/api/v1/parties/{review_seed['zero_id']}").json()
+        assert {item["run"]["id"] for item in selected["events"]} == original_run_ids
+        assert all(item["zero_hits"] and item["party_evidence"] for item in selected["events"])
+        completed_audit_runs = {
+            row["target_id"]
+            for row in selected["audit_log"]
+            if row["action"] == "screening.completed"
+        }
+        assert completed_audit_runs == original_run_ids
+        assert loaded_run_ids == original_run_ids
+        assert not loaded_run_ids & unrelated_run_ids
+    finally:
+        event.remove(ScreeningRun, "load", record_full_run_load)

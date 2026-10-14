@@ -1,0 +1,8 @@
+{
+  "cases": 180,
+  "cases_sha256": "e270de4facd9326a7cd7392140b23a834460e7397221717eb618bdc765963581",
+  "frozen_before_engine_changes": true,
+  "negative_pairs": 60,
+  "positive_pairs": 120,
+  "schema_version": 1
+}

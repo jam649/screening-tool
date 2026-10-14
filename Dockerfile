@@ -3,6 +3,7 @@ WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+COPY docs/licenses/frontend-runtime-LICENSES.txt /build/docs/licenses/frontend-runtime-LICENSES.txt
 RUN npm run build
 
 FROM ghcr.io/astral-sh/uv:0.11.31@sha256:ecd4de2f060c64bea0ff8ecb182ddf46ba3fcccdc8a60cfdbaf20d1a047d7437 AS uv-bin

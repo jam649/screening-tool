@@ -155,6 +155,8 @@ async function auditZip(page: Page, request: APIRequestContext, actorId: string,
 test("real model fixture browser verifies native settings, rail, fallback, human history and privacy", async ({ browser, baseURL }) => {
   test.skip(process.env.SCREENING_TOOL_M8_GATE !== "1" || !process.env.PLAYWRIGHT_BASE_URL, "Requires a released fresh packaged M8 fixture runtime.");
   test.setTimeout(420_000);
+  const artifactPrefix = process.env.SCREENING_TOOL_MODEL_ARTIFACT_PREFIX ?? "milestone-8-real-model";
+  expect(artifactPrefix, "Use a bounded filename prefix without path separators.").toMatch(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/);
   const origin = new URL(baseURL!).origin;
   const context = await browser.newContext({ baseURL, viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
@@ -313,8 +315,45 @@ test("real model fixture browser verifies native settings, rail, fallback, human
   await expect(earlier).toContainText("Fixture Model Reviewer"); await expect(earlier).toContainText(NOTE);
   const screenshots = join(homedir(), "Desktop/screenshots/screening-tool"); const artifacts = join(homedir(), "Desktop/artifacts/screening-tool");
   await mkdir(screenshots, { recursive: true }); await mkdir(artifacts, { recursive: true });
+  const visibleChanges = earlier.locator(".rv-changes");
+  await expect(visibleChanges).toContainText("Party type");
+  await expect(visibleChanges).toContainText("company");
+  await expect(visibleChanges).toContainText("individual");
+  await expect(visibleChanges).toContainText(TARGET);
+  const rawDisclosure = earlier.locator("details.rv-raw");
+  await expect(rawDisclosure).toHaveCount(1);
+  await expect(rawDisclosure).toHaveJSProperty("open", false);
+  const rawSummary = rawDisclosure.locator(":scope > summary");
+  await expect(rawSummary).toContainText("Your record · Raw source data changed");
+  const decisionPosts: string[] = [];
+  const observeDecision = (request: import("@playwright/test").Request) => {
+    if (request.method() === "POST" && /\/hits\/[^/]+\/dispositions$/.test(new URL(request.url()).pathname))
+      decisionPosts.push(request.method());
+  };
+  reviewerPage.on("request", observeDecision);
   await earlier.scrollIntoViewIfNeeded();
-  await reviewerPage.screenshot({ path: join(screenshots, "milestone-8-real-model-reviewer-history.png") });
+  await reviewerPage.screenshot({ path: join(screenshots, `${artifactPrefix}-reviewer-history.png`) });
+  await rawSummary.focus();
+  await reviewerPage.keyboard.press("Enter");
+  await expect(rawDisclosure).toHaveJSProperty("open", true);
+  const rawChange = reopened.prior_disposition.what_changed.party.raw;
+  const rawBlocks = rawDisclosure.locator("pre.rv-json");
+  expect(await rawBlocks.nth(0).textContent()).toBe(JSON.stringify(rawChange.before, null, 2));
+  expect(await rawBlocks.nth(1).textContent()).toBe(JSON.stringify(rawChange.after, null, 2));
+  expect(await rawBlocks.first().evaluate(node => node.clientHeight)).toBeLessThanOrEqual(400);
+  await rawSummary.scrollIntoViewIfNeeded();
+  await reviewerPage.screenshot({ path: join(screenshots, `${artifactPrefix}-reviewer-raw-expanded.png`) });
+  await reviewerPage.keyboard.press("Space");
+  await expect(rawDisclosure).toHaveJSProperty("open", false);
+  await reviewerPage.setViewportSize({ width: 390, height: 844 });
+  await expect(earlier).toContainText(NOTE);
+  await expect(visibleChanges).toContainText("Party type");
+  expect(await reviewerPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await earlier.scrollIntoViewIfNeeded();
+  await reviewerPage.screenshot({ path: join(screenshots, `${artifactPrefix}-reviewer-history-mobile.png`) });
+  expect(decisionPosts).toEqual([]);
+  reviewerPage.off("request", observeDecision);
+  await reviewerPage.setViewportSize({ width: 1440, height: 1000 });
 
   await page.goto("/settings");
   await provider(page).selectOption("jev");
@@ -342,7 +381,7 @@ test("real model fixture browser verifies native settings, rail, fallback, human
   await provider(page).selectOption("laya");
   await expect(panel(page).getByLabel("New Laya API key", { exact: true })).toHaveValue("");
   await panel(page).getByLabel("New Laya API key", { exact: true }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: join(screenshots, "milestone-8-real-model-settings-cleared.png") });
+  await page.screenshot({ path: join(screenshots, `${artifactPrefix}-settings-cleared.png`) });
   await provider(page).selectOption("none");
   const privateValues = [LAYA_KEY, JEV_KEY, ADMIN_PASSWORD, REVIEWER_PASSWORD, session.csrf_token, reviewer.csrf_token, invitationToken, ...(await context.cookies()).map(cookie => cookie.value), ...(await reviewerContext.cookies()).map(cookie => cookie.value)];
   const zip = await auditZip(page, context.request, session.user.id, privateValues);
@@ -350,8 +389,8 @@ test("real model fixture browser verifies native settings, rail, fallback, human
   expect(digest(oldHit.party_snapshot)).toBe(originalSnapshots.party); expect(digest(oldHit.entry_snapshot)).toBe(originalSnapshots.entry);
   expect(browserErrors).toEqual([]); expect(externalOrigins).toEqual([]);
   const finalRemote = await remote(); expect(finalRemote.calls).toBeGreaterThan(0); expect(finalRemote.writer_checks).toBe(finalRemote.calls);
-  const evidence = { gate: "milestone-8-real-model-browser", fixture_only: true, fresh_complete_gate: true, live_jev: "unverified", actual_local_laya: "separate coordinator gate", admin_id: session.user.id, reviewer_id: reviewer.user.id, source_id: sources[0].id, party_count: 2, initial_hit_id: initial.id, rail_hit_id: railRow.id, reopened_hit_id: reopenedRow.id, generation_conflict_http: 409, model_generations: [laya.result.generation, rail.result.generation, jev.result.generation, disabled.result.generation], synthetic_test: { laya: connected, jev: hostedTest }, rail: { det_score: railHit.det_score, probability: railHit.model_prob, confidence: railHit.final_confidence, bucket: railHit.bucket }, fallback: { run_id: fallbackRun.id, hit_id: fallbackHit.id, code: fallbackHit.explanation.adjudication.error_code, model_prob: fallbackHit.model_prob, confidence: fallbackHit.final_confidence }, genuine_human_group: { decision_id: decision.disposition.id, observation_count: group.length, actor_id: reviewer.user.id, confirmed_decision_id: confirmedDecision.disposition.id, confirmed_observations: confirmedDecision.observations_dispositioned }, four_hash_reopening: true, snapshot_sha256: originalSnapshots, suppressed_repeat_no_new_model_call: true, write_only_keys_cleared: true, exact_hosted_acknowledgment: true, private_drafts_not_tested: true, zip, browser_errors: browserErrors, external_browser_origins: externalOrigins, provider_writer_checks: finalRemote.writer_checks, provider_calls: finalRemote.calls };
-  await writeFile(join(artifacts, "milestone-8-real-model-browser.json"), JSON.stringify(evidence, null, 2) + "\n");
+  const evidence = { gate: "milestone-8-real-model-browser", fixture_only: true, fresh_complete_gate: true, live_jev: "unverified", actual_local_laya: "separate coordinator gate", admin_id: session.user.id, reviewer_id: reviewer.user.id, source_id: sources[0].id, party_count: 2, initial_hit_id: initial.id, rail_hit_id: railRow.id, reopened_hit_id: reopenedRow.id, generation_conflict_http: 409, model_generations: [laya.result.generation, rail.result.generation, jev.result.generation, disabled.result.generation], synthetic_test: { laya: connected, jev: hostedTest }, rail: { det_score: railHit.det_score, probability: railHit.model_prob, confidence: railHit.final_confidence, bucket: railHit.bucket }, fallback: { run_id: fallbackRun.id, hit_id: fallbackHit.id, code: fallbackHit.explanation.adjudication.error_code, model_prob: fallbackHit.model_prob, confidence: fallbackHit.final_confidence }, genuine_human_group: { decision_id: decision.disposition.id, observation_count: group.length, actor_id: reviewer.user.id, confirmed_decision_id: confirmedDecision.disposition.id, confirmed_observations: confirmedDecision.observations_dispositioned }, four_hash_reopening: true, snapshot_sha256: originalSnapshots, suppressed_repeat_no_new_model_call: true, native_raw_disclosure: { default_closed: true, exact_before_after: true, bounded: true, keyboard_no_decision_post: true, business_changes_visible: true, mobile_no_horizontal_overflow: true }, write_only_keys_cleared: true, exact_hosted_acknowledgment: true, private_drafts_not_tested: true, zip, browser_errors: browserErrors, external_browser_origins: externalOrigins, provider_writer_checks: finalRemote.writer_checks, provider_calls: finalRemote.calls };
+  await writeFile(join(artifacts, `${artifactPrefix}-browser.json`), JSON.stringify(evidence, null, 2) + "\n");
   console.info("Real model browser gate: native Reviewer history, synthetic-only hosted acknowledgment, key clearing and ZIP privacy verified; safe evidence saved.");
   await reviewerContext.close(); await context.close();
 });
