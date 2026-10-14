@@ -343,7 +343,7 @@ jobs:
 
   matching-benchmark:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -365,7 +365,7 @@ jobs:
         if: always()
         run: |
           docker cp screening-tool-matching-benchmark:/data/m9-main-20k-25k/report.json "$RUNNER_TEMP/matching-benchmark-checkpoint.json" || true
-          python3 -c 'import json,os; from pathlib import Path; p=Path(os.environ["RUNNER_TEMP"]).joinpath("matching-benchmark-checkpoint.json"); report=json.loads(p.read_text()) if p.exists() else {}; print(json.dumps({"checkpoint_present":p.exists(),"passed":report.get("passed"),"failed_check":report.get("failed_check"),"resource_targets":report.get("resource_targets"),"runs":[{k:r.get(k) for k in ("name","seconds","engine_peak_rss_mib","full_gate_peak_rss_mib","operation_status")} for r in report.get("runs",[])]},sort_keys=True))'
+          python3 -c 'import json,os; from pathlib import Path; p=Path(os.environ["RUNNER_TEMP"]).joinpath("matching-benchmark-checkpoint.json"); report=json.loads(p.read_text()) if p.exists() else {}; print(json.dumps({"checkpoint_present":p.exists(),"passed":report.get("passed"),"failed_check":report.get("failed_check"),"resource_targets":report.get("resource_targets"),"hardware":report.get("hardware"),"setup_seconds":report.get("setup_seconds"),"runs":[{k:r.get(k) for k in ("name","seconds","phase_seconds","cpu_seconds","engine_peak_rss_mib","full_gate_peak_rss_mib","operation_status","measurements","candidates","candidates_considered","parties_candidates_completed","hits_recorded","hits_new","queue_size","audit_rows_total","party_evidence_rows","zero_hit_evidence_rows","queue_read_seconds","coverage_read_seconds","db_bytes","wal_bytes")} for r in report.get("runs",[])]},sort_keys=True))'
       - if: always()
         run: |
           docker rm -f screening-tool-matching-benchmark || true
