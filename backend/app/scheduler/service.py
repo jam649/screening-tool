@@ -25,6 +25,7 @@ OPERATIONS = {
     "screen_changed",
     "source_sync",
     "source_disconnect",
+    "bc_subscriptions",
     "monitor_cycle",
     "morning_report",
     "alert_dispatch",
@@ -35,12 +36,16 @@ DISCONNECT_HANDLERS: dict = {}
 
 
 def register_default_connectors():
+    from app.connectors.bc import sync_bc_source
+    from app.connectors.bc_subscriptions import disconnect_bc_source
     from app.connectors.qbo import sync_qbo_source
     from app.connectors.qbo_auth import disconnect_source
 
     # Retain explicit test/operator registrations; production uses fixed vendors.
     SOURCE_HANDLERS.setdefault("qbo", sync_qbo_source)
     DISCONNECT_HANDLERS.setdefault("qbo", disconnect_source)
+    SOURCE_HANDLERS.setdefault("bc", sync_bc_source)
+    DISCONNECT_HANDLERS.setdefault("bc", disconnect_bc_source)
 
 
 def pollable_sources(db):
@@ -111,6 +116,20 @@ def enqueue_source_disconnect(db, source_id, *, actor_user_id):
     return _enqueue_source(db, source_id, "source_disconnect", actor_user_id=actor_user_id)
 
 
+def enqueue_bc_subscriptions(db, source_id, *, actor_user_id=None):
+    """Persist lifecycle work in the caller's writer with fixed, nonsecret options."""
+    source = db.get(Source, source_id)
+    if source is None or source.kind != "bc":
+        raise ValueError("Choose a Business Central source")
+    return _enqueue_source(db, source_id, "bc_subscriptions", actor_user_id=actor_user_id)
+
+
+def _connector_transport(db, kind):
+    loader = db.info.get(f"{kind}_transport_loader") if kind in {"qbo", "bc"} else None
+    transport = loader() if loader else None
+    return {"transport": transport} if transport is not None else {}
+
+
 def register_source_handler(kind, handler):
     if kind not in {"qbo", "bc"}:
         raise ValueError("Unsupported connector")
@@ -134,7 +153,7 @@ def enqueue_operation(
     with factory() as db:
         if operation == "screen_party" and (not party_id or db.get(Party, party_id) is None):
             failure = "party_not_found"
-        elif operation in {"source_sync", "source_disconnect"} and (
+        elif operation in {"source_sync", "source_disconnect", "bc_subscriptions"} and (
             not source_id or db.get(Source, source_id) is None
         ):
             failure = "source_not_found"
@@ -253,13 +272,9 @@ def _execute(factory, config, attempt, execution):
             handler = SOURCE_HANDLERS.get(source.kind)
             if handler is None:
                 raise ValueError("This connector does not support scheduled sync yet")
-            options = {}
+            options = _connector_transport(db, source.kind)
             if "mode" in parameters:
                 options["mode"] = parameters["mode"]
-            loader = db.info.get("qbo_transport_loader")
-            transport = loader() if loader else None
-            if source.kind == "qbo" and transport is not None:
-                options["transport"] = transport
             result = handler(db, config, source, **options)
             safe = {
                 key: value
@@ -290,18 +305,54 @@ def _execute(factory, config, attempt, execution):
             handler = DISCONNECT_HANDLERS.get(source.kind)
             if handler is None:
                 raise ValueError("This connector does not support disconnect")
-            loader = db.info.get("qbo_transport_loader")
-            transport = loader() if loader else None
-            options = {"transport": transport} if transport is not None else {}
+            options = _connector_transport(db, source.kind)
             result = handler(db, config, source, **options)
             outcome = {
                 key: result[key]
-                for key in ("source_id", "connection_status", "revocation_status", "error_code")
+                for key in (
+                    "source_id",
+                    "connection_status",
+                    "revocation_status",
+                    "cleanup_status",
+                    "subscription_status",
+                    "subscription_count",
+                    "error_code",
+                )
                 if key in result
             }
         execution.complete(outcome)
-        if outcome.get("revocation_status") == "failed":
-            raise RuntimeError("Provider revocation failed; polling has stopped locally")
+        if (
+            outcome.get("revocation_status") == "failed"
+            or outcome.get("cleanup_status") == "failed"
+            or outcome.get("error_code")
+        ):
+            raise RuntimeError("Provider disconnect cleanup failed; polling has stopped locally")
+        return outcome
+    if operation == "bc_subscriptions":
+        from app.connectors.bc_subscriptions import reconcile_bc_subscriptions
+
+        with operation_session(factory, execution, actor) as db:
+            source = db.get(Source, attempt.source_id)
+            if source is None or source.kind != "bc":
+                raise ValueError("Choose a Business Central source")
+            result = reconcile_bc_subscriptions(
+                db, config, source, **_connector_transport(db, source.kind)
+            )
+            outcome = {
+                key: result[key]
+                for key in (
+                    "source_id",
+                    "connection_status",
+                    "cleanup_status",
+                    "subscription_status",
+                    "subscription_count",
+                    "error_code",
+                )
+                if key in result
+            }
+        execution.complete(outcome)
+        if outcome.get("error_code") or outcome.get("cleanup_status") == "failed":
+            raise RuntimeError("Business Central subscription reconciliation failed")
         return outcome
     if operation == "monitor_cycle":
         outcomes = []
@@ -395,7 +446,7 @@ def dispatch_attempt(factory, config, attempt_id):
     with factory() as db:
         row = db.get(OperationAttempt, attempt_id)
         payload = attempt_payload(row)
-    if attempt.operation in {"source_sync", "source_disconnect"}:
+    if attempt.operation in {"source_sync", "source_disconnect", "bc_subscriptions"}:
         from app.scheduler.runtime import current_runtime
 
         runtime = current_runtime()

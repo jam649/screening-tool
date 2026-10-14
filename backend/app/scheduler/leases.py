@@ -45,6 +45,9 @@ def lease_key(operation: str, source_id=None):
         "source_disconnect",
         "qbo_oauth_start",
         "qbo_oauth_callback",
+        "bc_companies",
+        "bc_connect",
+        "bc_subscriptions",
     }:
         if not source_id:
             raise ValueError("Choose a source")
@@ -122,7 +125,7 @@ def validate_parameters(operation, parameters):
     ):
         raise ValueError("Choose incremental or full sync")
     if "defer_if_busy" in parameters and (
-        operation not in {"source_sync", "source_disconnect"}
+        operation not in {"source_sync", "source_disconnect", "bc_subscriptions"}
         or type(parameters["defer_if_busy"]) is not bool
     ):
         raise ValueError("Unsupported overlap behavior")

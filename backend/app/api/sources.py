@@ -1,9 +1,11 @@
 """Source health and validated CSV/XLSX imports; no credentials are returned."""
 
 import json
+import re
 from datetime import timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -34,9 +36,27 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 class SourceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["csv", "qbo"] = "csv"
+    kind: Literal["csv", "qbo", "bc"] = "csv"
     label: str = Field(min_length=1, max_length=200)
     environment: Literal["sandbox", "production"] | None = None
+    tenant_id: str | None = None
+    bc_environment: str | None = None
+
+    @field_validator("tenant_id")
+    @classmethod
+    def bc_tenant(cls, value):
+        if value is None:
+            return None
+        if not re.fullmatch(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", value):
+            raise ValueError("Enter a tenant UUID")
+        return str(UUID(value))
+
+    @field_validator("bc_environment")
+    @classmethod
+    def bc_environment_name(cls, value):
+        if value is not None and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,28}", value):
+            raise ValueError("Enter an environment name of fewer than 30 ASCII characters")
+        return value
 
     @field_validator("label")
     @classmethod
@@ -73,6 +93,7 @@ def source_payload(source: Source, runtime=None) -> dict[str, Any]:
         "last_error": source.last_error,
         "column_mapping": source.config.get("column_mapping", {}),
         "environment": source_environment(source) if source.kind == "qbo" else None,
+        "bc_environment": source.config.get("bc_environment") if source.kind == "bc" else None,
         "connection_status": source.config.get("connection_status")
         if source.kind in {"qbo", "bc"}
         else None,
@@ -111,7 +132,12 @@ def create_source(body: SourceCreate, db: DB, user: AdminUser):
     actor_id = user.id
     begin_write(db)
     validate_admin(db, actor_id)
-    if (body.kind == "qbo" and body.environment is None) or (
+    if body.kind == "bc":
+        if body.environment is not None or body.tenant_id is None or body.bc_environment is None:
+            raise HTTPException(422, "Choose a tenant UUID and Business Central environment")
+    elif body.tenant_id is not None or body.bc_environment is not None:
+        raise HTTPException(422, "Tenant and Business Central environment belong to BC sources")
+    elif (body.kind == "qbo" and body.environment is None) or (
         body.kind == "csv" and body.environment is not None
     ):
         raise HTTPException(422, "Choose an environment for QuickBooks sources only")
@@ -119,6 +145,14 @@ def create_source(body: SourceCreate, db: DB, user: AdminUser):
     if body.kind == "qbo":
         values = {
             "environment": body.environment,
+            "connection_status": "configured",
+            "connection_generation": 0,
+            "webhooks_enabled": False,
+        }
+    elif body.kind == "bc":
+        values = {
+            "tenant_id": body.tenant_id,
+            "bc_environment": body.bc_environment,
             "connection_status": "configured",
             "connection_generation": 0,
             "webhooks_enabled": False,

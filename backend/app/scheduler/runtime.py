@@ -8,7 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 
-from app.models import Setting, User, utcnow
+from app.models import Setting, Source, User, utcnow
 from app.notifications.settings import public_settings
 from app.scheduler.jobstore import JSONJobStore
 from app.scheduler.service import dispatch_pending, pollable_sources, run_operation
@@ -44,7 +44,12 @@ def scheduled_command(operation, source_id=None):
         if operation == "dispatch_pending":
             dispatch_pending(runtime.factory, runtime.config)
         else:
-            run_operation(runtime.factory, runtime.config, operation, source_id=source_id)
+            options = (
+                {"parameters": {"defer_if_busy": True}} if operation == "bc_subscriptions" else {}
+            )
+            run_operation(
+                runtime.factory, runtime.config, operation, source_id=source_id, **options
+            )
     except Exception:
         # Durable operation attempts provide the UI failure evidence. Do not print
         # traceback/input values from a scheduler worker.
@@ -69,6 +74,18 @@ class SchedulerRuntime:
             values = monitoring_settings(db, self.config)
             notifications = public_settings(db)
             sources = [source.id for source in pollable_sources(db)]
+            bc_lifecycle = [
+                source.id
+                for source in db.scalars(select(Source).where(Source.kind == "bc"))
+                if source.credentials_enc
+                and (
+                    (
+                        source.config.get("connection_status") == "connected"
+                        and source.config.get("webhooks_enabled") is True
+                    )
+                    or source.config.get("cleanup_status") in {"pending", "failed"}
+                )
+            ]
         timezone = ZoneInfo(values["timezone"])
         definitions = {}
         for job_id, operation, when, day in [
@@ -91,6 +108,12 @@ class SchedulerRuntime:
                 "source_sync",
                 source_id,
                 IntervalTrigger(minutes=values["source_poll_minutes"], timezone=timezone),
+            )
+        for source_id in bc_lifecycle:
+            definitions[f"bc-subscriptions-{source_id}"] = (
+                "bc_subscriptions",
+                source_id,
+                IntervalTrigger(hours=12, timezone=timezone),
             )
         for job_id, operation in [
             ("screen-recovery", "screen_changed"),

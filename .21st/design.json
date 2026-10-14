@@ -31,7 +31,9 @@
       "frontend/src/Audit.tsx",
       "frontend/src/SettingsControls.tsx",
       "frontend/src/UsersPanel.tsx",
-      "frontend/src/AcceptInvite.tsx"
+      "frontend/src/AcceptInvite.tsx",
+      "frontend/src/BcSettings.tsx",
+      "frontend/src/BcSourceControls.tsx"
     ],
     "assets": [],
     "instructions": [
@@ -135,6 +137,10 @@
     {
       "type": "implementation-authorship",
       "detail": "Claude Opus 5.5 (first-party claude-opus-5-5, medium effort, session 22c7f5ae-b10d-4664-88f7-c141e969522d) authored adminApi.ts, SettingsControls.tsx, UsersPanel.tsx, AcceptInvite.tsx, admin.css and admin.spec.ts through approved source-only no-tool structured output. Successful 633-second invocation, no fallback or permission denials. Sol integrated invitation route/session isolation and checked Admin controls and token privacy."
+    },
+    {
+      "type": "implementation-authorship",
+      "detail": "Actual first-party claude-opus-5-5 MEDIUM authored BC Settings/API/tests (6ee520e4-761a-4c85-bc40-ac7947ac8c10,198393ms) and BC source controls/tests (63dd609f-bdab-4800-9548-6aedd2c5bf04,439214ms) through user-approved source/design-only, tool-free structured output. Both canonical-model sessions completed without fallback/provider errors. Sol integrated shared routes/caches and contract alignment; raw exchanges remain ignored."
     }
   ],
   "generatedAt": "2026-10-14T00:03:32.076Z"

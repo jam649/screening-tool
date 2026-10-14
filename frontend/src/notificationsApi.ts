@@ -121,8 +121,10 @@ export function useSaveNotificationConfig() {
     onSuccess: (saved, changes) => {
       client.setQueryData(notificationKeys.settings, saved);
       void client.invalidateQueries({ queryKey: notificationKeys.status });
-      if (changes.public_base_url !== undefined)
-        void client.invalidateQueries({ queryKey: ["adminConnectors", "qbo"] });
+      if (changes.public_base_url !== undefined) {
+        void client.invalidateQueries({ queryKey: ["adminConnectors"] });
+        void client.invalidateQueries({ queryKey: ["sources"] });
+      }
     },
     onError: () => client.invalidateQueries({ queryKey: notificationKeys.settings }),
   });

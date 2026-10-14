@@ -1,5 +1,6 @@
-"""Remove OAuth callback credentials before routing, errors or URL construction."""
+"""Remove OAuth and BC validation credentials before routing or URL construction."""
 
+import re
 from urllib.parse import parse_qsl
 
 from app.connectors.qbo_common import CALLBACK_PATH
@@ -10,13 +11,16 @@ class OAuthCallbackPrivacyMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") != CALLBACK_PATH:
+        path = scope.get("path", "")
+        bc_webhook = path.startswith("/api/v1/webhooks/bc/")
+        if scope["type"] != "http" or (path != CALLBACK_PATH and not bc_webhook):
             return await self.app(scope, receive, send)
         raw = scope.get("query_string", b"")
         scope["query_string"] = b""
         params = {}
+        query_valid = True
         try:
-            if len(raw) > 16384:
+            if len(raw) > 16384 or re.search(rb"%(?![0-9A-Fa-f]{2})", raw):
                 raise ValueError
             pairs = parse_qsl(
                 raw.decode("ascii"),
@@ -29,9 +33,13 @@ class OAuthCallbackPrivacyMiddleware:
                 raise ValueError
             params = dict(pairs)
         except (ValueError, UnicodeError):
-            pass
+            query_valid = False
         # Private process memory only; never persistent job parameters or audit.
-        scope["_qbo_callback_params"] = params
+        if bc_webhook:
+            scope["_bc_webhook_params"] = params
+            scope["_bc_webhook_query_valid"] = query_valid
+        else:
+            scope["_qbo_callback_params"] = params
 
         async def private_send(message):
             if message["type"] == "http.response.start":

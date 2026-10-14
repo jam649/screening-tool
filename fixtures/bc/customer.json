@@ -1,0 +1,18 @@
+{
+  "@odata.etag": "W/\"synthetic-customer-etag\"",
+  "id": "33333333-3333-4333-8333-333333333333",
+  "number": "DUMMY-CUSTOMER-001",
+  "displayName": "Synthetic Coastal Trading",
+  "type": "Company",
+  "addressLine1": "123 Synthetic Avenue",
+  "addressLine2": "Suite 42",
+  "city": "Portland",
+  "state": "ME",
+  "country": "US",
+  "postalCode": "04101",
+  "phoneNumber": "+1-555-0100",
+  "email": "customer@example.test",
+  "blocked": "All",
+  "lastModifiedDateTime": "2026-10-14T11:59:59.123Z",
+  "syntheticMetadata": {"note": "Complete raw-object fidelity proof"}
+}

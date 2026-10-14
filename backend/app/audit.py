@@ -76,6 +76,7 @@ SECRET_KEY_MARKERS = (
     "accesskey",
     "privatekey",
     "clientassertion",
+    "clientstate",
     "connectionstring",
 )
 
@@ -212,6 +213,8 @@ def protect_and_audit(db: Session, flush_context, instances):
         OAuthState,
     )
     for obj in db.deleted:
+        if isinstance(obj, Source) and obj.kind == "bc" and obj.config.get("company_id"):
+            raise ImmutableAuditError("Bound Business Central source identity is permanent")
         if isinstance(obj, permanent):
             raise ImmutableAuditError(f"{obj.__tablename__} records cannot be deleted")
         if isinstance(obj, (Disposition, Hit)) and (obj.__tablename__, obj.id) not in (
@@ -256,6 +259,30 @@ def protect_and_audit(db: Session, flush_context, instances):
         },
     }
     for obj in db.dirty:
+        if isinstance(obj, Source):
+            original_identity = inspect(obj).identity
+            original_id = original_identity[0] if original_identity else obj.id
+            previous_source = (
+                db.connection()
+                .execute(
+                    select(Source.id, Source.kind, Source.config).where(Source.id == original_id)
+                )
+                .first()
+            )
+            if (
+                previous_source is not None
+                and previous_source.kind == "bc"
+                and previous_source.config.get("company_id")
+            ):
+                if (
+                    obj.id != previous_source.id
+                    or obj.kind != "bc"
+                    or any(
+                        obj.config.get(key) != previous_source.config.get(key)
+                        for key in ("tenant_id", "bc_environment", "company_id")
+                    )
+                ):
+                    raise ImmutableAuditError("Bound Business Central source identity is permanent")
         if isinstance(obj, OAuthState):
             consumed = inspect(obj).attrs.consumed_at.history
             if consumed.has_changes():

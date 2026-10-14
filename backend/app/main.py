@@ -11,6 +11,7 @@ from app import audit  # noqa: F401 -- registers ORM audit guards
 from app.api import audit as audit_api
 from app.api import (
     auth,
+    bc,
     csl,
     dashboard,
     exports,
@@ -47,6 +48,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         application.state.session_factory.kw["info"]["qbo_transport_loader"] = lambda: getattr(
             application.state, "qbo_transport", None
         )
+        application.state.session_factory.kw["info"]["bc_transport_loader"] = lambda: getattr(
+            application.state, "bc_transport", None
+        )
         register_default_connectors()
         scheduler = None
         try:
@@ -70,6 +74,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     application.include_router(screening.router, prefix="/api/v1")
     application.include_router(sources.router, prefix="/api/v1")
     application.include_router(qbo.router, prefix="/api/v1")
+    application.include_router(bc.router, prefix="/api/v1")
     application.include_router(monitoring.router, prefix="/api/v1")
     application.include_router(notifications.router, prefix="/api/v1")
     application.include_router(exports.router, prefix="/api/v1")

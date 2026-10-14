@@ -1,0 +1,17 @@
+{
+  "@odata.etag": "W/\"synthetic-vendor-etag\"",
+  "id": "33333333-3333-4333-8333-333333333333",
+  "number": "DUMMY-VENDOR-001",
+  "displayName": "Synthetic Meadow Supplies",
+  "addressLine1": "456 Dummy Road",
+  "addressLine2": "",
+  "city": "Ottawa",
+  "state": "ON",
+  "country": "CA",
+  "postalCode": "K1A 0B1",
+  "phoneNumber": "+1-555-0101",
+  "email": "vendor@example.test",
+  "blocked": "Payment",
+  "lastModifiedDateTime": "2026-10-14T11:59:59.123Z",
+  "syntheticMetadata": {"note": "A posting block does not delete a party"}
+}

@@ -2,7 +2,7 @@
 
 Self-hosted customer and vendor screening against the U.S. Consolidated Screening List (CSL). Python/FastAPI/SQLite and React, in one container. MIT licensed.
 
-**Implementation is underway.** The secure setup wizard, CSL pipeline, CSV/XLSX import, deterministic matching, keyboard review, party history, users, persistent monitoring, SMTP reports, PDF/CSV/ZIP exports and bounded retention have passed the real Docker and browser gates through milestone 5. QuickBooks OAuth, full/CDC sync, signed webhooks and revocation have passed the packaged fixture, browser and restart gates in milestone 6. Business Central, optional models and release hardening are being completed in order, as tracked in [the implementation plan](docs/plans/implementation.md). Live QuickBooks and Business Central sandbox validation is deferred by the project owner; fixture checks do not establish production integration readiness.
+**Implementation is underway.** The secure setup wizard, CSL pipeline, CSV/XLSX import, deterministic matching, keyboard review, party history, users, persistent monitoring, SMTP reports, PDF/CSV/ZIP exports and bounded retention have passed the real Docker and browser gates through milestone 5. QuickBooks OAuth, full/CDC sync, signed webhooks and revocation have passed the packaged fixture, browser and restart gates in milestone 6. Business Central company discovery, full/incremental sync, validated subscriptions and cleanup have passed the fresh packaged API, browser and retained-volume restart gates in milestone 7; publication CI is pending. Optional models and release hardening are being completed in order, as tracked in [the implementation plan](docs/plans/implementation.md). Live QuickBooks and Business Central sandbox validation is deferred by the project owner; fixture checks do not establish production integration readiness.
 
 ## Start locally
 
@@ -44,6 +44,20 @@ docker compose exec screening-tool screening-tool sync SOURCE_UUID --full
 ```
 
 The [milestone 6 evidence record](docs/milestones/6.md) distinguishes synthetic contract checks, actual application checks and pending live sandbox checks. HTTP access logs are disabled; configure your reverse proxy to omit OAuth query strings as well. Callback responses use `Referrer-Policy: no-referrer`.
+
+## Business Central
+
+Live tenant validation remains deferred. The connector uses Microsoft's documented [service-to-service app authentication](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/administration/automation-apis-using-s2s-authentication); company selection takes place inside this application.
+
+1. Register your Entra app, create a client secret and grant the Business Central application permission `API.ReadWrite.All` with tenant consent. In Business Central's **Microsoft Entra applications** page, enable that application and assign the object permissions needed for company/customer/vendor reads and subscription management. Microsoft prohibits assigning `SUPER` to applications. The precise restricted permission set must be checked in your tenant before live use.
+2. In **Settings → Business Central app settings**, save the application UUID and secret. One encrypted app configuration serves the sources. Saved values appear as configured flags; omitted fields preserve them.
+3. In **Sources**, add a Business Central source with its tenant UUID and actual environment name, discover accessible companies, and explicitly connect the selected company. One source serves one company. The bound company identity remains permanent after disconnect; another company needs another source.
+4. Connected sources poll changes using an overlapping timestamp filter. A daily full reconciliation detects hard deletions; **Full sync** requests one immediately. Posting restrictions such as `blocked` leave a party active for screening.
+5. For optional webhooks, configure a public HTTPS base URL in **Settings → Email notifications** and enable them on the connected source. The app registers customer/vendor subscriptions, validates each challenge and verifies each delivery's private client state. Actual subscription expiries and failed cleanup are visible. A persistent 12-hour reconciliation job renews subscriptions when due; polling continues.
+
+Disconnect stops polling immediately and preserves records and review evidence. It removes the app's remote webhook subscriptions and reports failures with an encrypted retry obligation. Entra app consent remains under your tenant administrator's control. Configure your reverse proxy to omit webhook validation query strings; application HTTP access logging is disabled.
+
+The [milestone 7 record](docs/milestones/7.md) tracks synthetic contracts, application gates and deferred live checks separately.
 
 ## Development checks
 

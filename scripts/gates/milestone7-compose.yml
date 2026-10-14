@@ -1,0 +1,11 @@
+# Fixture-only override; requires a fresh named volume and its original key.
+# The coordinator creates/restarts containers. This file never resets a volume.
+# Production Compose never enables the fixture provider/control routes.
+services:
+  screening-tool:
+    command: ["python", "/tmp/gates/milestone7.py", "--serve-fixture"]
+    environment:
+      SCREENING_TOOL_DATABASE_URL: sqlite:////data/milestone7-fixture.db
+      SCREENING_TOOL_SCHEDULER_ENABLED: "true"
+    volumes:
+      - ./scripts/gates:/tmp/gates:ro

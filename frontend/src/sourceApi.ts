@@ -16,6 +16,7 @@ export type Source = {
   last_error: string | null;
   column_mapping: ColumnMapping;
   environment?: "sandbox" | "production" | null;
+  bc_environment?: string | null;
   connection_status?: "configured" | "connected" | "reconnect_required" | "disconnecting" | "disconnected" | null;
 };
 

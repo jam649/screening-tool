@@ -10,6 +10,7 @@ import { ApiError, type Session } from "./api";
 import { useSearchParams } from "react-router-dom";
 import { LocalTime } from "./CSLPanel";
 import { AddQboSource, QboSourceControls } from "./QboSourceControls";
+import { AddBcSource, BcSourceControls } from "./BcSourceControls";
 import { formatCount, isAdminSession } from "./csl";
 import {
   DEMO_CSV_URL,
@@ -81,7 +82,7 @@ function SourceCard({
       <div className="source-card-head">
         <div>
           <span className="source-kind">
-            {source.kind === "csv" ? "CSV / XLSX upload" : source.kind === "qbo" ? "QuickBooks Online" : source.kind}
+            {source.kind === "csv" ? "CSV / XLSX upload" : source.kind === "qbo" ? "QuickBooks Online" : source.kind === "bc" ? "Business Central" : source.kind}
           </span>
           <h3 id={titleId}>{source.label}</h3>
         </div>
@@ -117,7 +118,10 @@ function SourceCard({
         {source.kind === "qbo" && source.environment && (
           <div><dt>Environment</dt><dd className="capitalize">{source.environment}</dd></div>
         )}
-        {source.kind === "qbo" && source.connection_status && (
+        {source.kind === "bc" && source.bc_environment && (
+          <div><dt>Environment</dt><dd>{source.bc_environment}</dd></div>
+        )}
+        {(source.kind === "qbo" || source.kind === "bc") && source.connection_status && (
           <div>
             <dt>Company connection</dt>
             <dd>{({ configured: "Not connected", connected: "Connected", reconnect_required: "Reconnect required", disconnecting: "Disconnecting", disconnected: "Disconnected" })[source.connection_status]}</dd>
@@ -132,6 +136,7 @@ function SourceCard({
         </div>
       )}
       {source.kind === "qbo" && session && <QboSourceControls session={session} source={source} />}
+      {source.kind === "bc" && session && <BcSourceControls session={session} source={source} />}
       {onUpload && (
         <button type="button" className="button secondary" onClick={onUpload}>
           Upload CSV or XLSX
@@ -195,7 +200,7 @@ function SourceList({
           <p>
             <strong>No sources yet.</strong>{" "}
             {admin
-              ? "Add a CSV or QuickBooks source below to bring in your customer and vendor records."
+              ? "Add a CSV, QuickBooks or Business Central source below to bring in your customer and vendor records."
               : "Your administrator hasn’t added any customer or vendor sources."}
           </p>
         </div>
@@ -953,6 +958,7 @@ export function Sources({ session }: { session: Session }) {
           </section>
           {admin && <AddSourceForm onCreated={setUploading} />}
           {admin && <AddQboSource session={session} />}
+          {admin && <AddBcSource session={session} />}
           {admin && <SampleDownload />}
         </>
       )}

@@ -1,5 +1,7 @@
 """Validated SMTP configuration and frozen report/delivery status."""
 
+from urllib.parse import urlsplit
+
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
@@ -8,7 +10,7 @@ from app.api.deps import DB, AdminUser, CurrentUser
 from app.api.review import begin_write
 from app.api.users import validate_admin
 from app.audit import audit
-from app.models import NotificationBatch, NotificationDelivery
+from app.models import NotificationBatch, NotificationDelivery, Source
 from app.notifications.service import (
     batch_payload,
     dispatch_outbox,
@@ -25,6 +27,7 @@ from app.notifications.settings import (
 from app.reports.metrics import report_boundary
 from app.reports.morning import enqueue_morning_report
 from app.scheduler.runtime import current_runtime
+from app.scheduler.service import enqueue_bc_subscriptions
 
 router = APIRouter()
 
@@ -60,12 +63,38 @@ def patch_settings(body: NotificationChanges, request: Request, user: AdminUser,
     except NotificationConfigurationError as exc:
         raise HTTPException(422, str(exc)) from None
     after = notification_settings_payload(db, request.app.state.config)
+    if before["public_base_url"] != after["public_base_url"]:
+        for source in db.scalars(select(Source).where(Source.kind == "bc")):
+            if not source.credentials_enc or not (
+                source.config.get("webhooks_enabled")
+                or source.config.get("cleanup_status") in {"pending", "failed"}
+            ):
+                continue
+            if urlsplit(after["public_base_url"]).scheme != "https":
+                source.config = {
+                    **source.config,
+                    "webhooks_enabled": False,
+                    "cleanup_status": "pending",
+                }
+            attempt = enqueue_bc_subscriptions(db, source.id)
+            audit(
+                db,
+                "bc.webhook_address_changed",
+                "sources",
+                source.id,
+                after={
+                    "attempt_id": attempt.id,
+                    "webhooks_enabled": source.config.get("webhooks_enabled", False),
+                },
+            )
     # Payload contains only public settings and configured flags, never secret input.
     audit(db, "notifications.settings_changed", "settings", before=before, after=after)
     db.commit()
     runtime = current_runtime()
     if runtime:
         runtime.reconcile()
+        if before["public_base_url"] != after["public_base_url"]:
+            runtime.wake()
     return after
 
 
