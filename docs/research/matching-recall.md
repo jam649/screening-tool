@@ -379,9 +379,12 @@ differences. Independent differential fuzzing checked about 600,000 string pairs
 and 850,000 bound evaluations for the ceilings, 3.9 million explanation
 comparisons for the reordered scorer and 650,000 retained pairs for pair
 exclusion. `matching.py --recall` output is byte-identical. A batched fallback
-scan and a writer garbage-collection pause were deferred after review found a
-non-integer-cutoff boundary difference and memory risks; the fallback is the
-original implementation.
+scan and a writer garbage-collection pause were deferred from v0.1.0 after review
+found cutoff-boundary differences and memory risks. v0.1.1 re-lands the batched
+fallback with admission decided by rapidfuzz's own `extract_iter` wherever batch
+scores are not decisive and with bounded look-ahead memory, and gives the
+screening writer's SQLite connection a 256-MiB page cache while it writes a run;
+the GC pause stays out. The v0.1.1 release notes record its CI timings.
 
 | Release CI measurement ([run 38612203195](https://github.com/jam649/screening-tool/actions/runs/38612203195)) | Cold | Unchanged repeat |
 | --- | ---: | ---: |

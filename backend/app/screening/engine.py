@@ -7,6 +7,7 @@ context for each current pairing while retaining superseded open evidence in his
 """
 
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -222,6 +223,24 @@ def _hit_reference_query():
 def _hit_references(db: Session, query) -> Iterator[HitReference]:
     for row in db.execute(query).yield_per(500):
         yield HitReference(*row)
+
+
+# The writer applies a whole run in one transaction. With SQLite's default 2 MB
+# page cache that transaction spills and rewrites the same index and overflow
+# pages to the WAL many times; a larger cache on the writer's connection, only
+# while it writes a run, avoids most of that disk I/O. Caching never changes data.
+WRITER_PAGE_CACHE_KIB = 262_144
+
+
+@contextmanager
+def _writer_page_cache(db: Session) -> Iterator[None]:
+    connection = db.connection()
+    previous = connection.exec_driver_sql("PRAGMA cache_size").scalar_one()
+    connection.exec_driver_sql(f"PRAGMA cache_size=-{WRITER_PAGE_CACHE_KIB}")
+    try:
+        yield
+    finally:
+        connection.exec_driver_sql(f"PRAGMA cache_size={int(previous)}")
 
 
 def _begin(db: Session) -> None:
@@ -1007,15 +1026,16 @@ def run_screening(
         results = _infer(db, prepared, hook)
         _begin(db)
         _validate_prepared(db, prepared)
-        run = _execute(
-            db,
-            trigger=trigger,
-            party_ids=party_ids,
-            entry_ids=entry_ids,
-            csl_version_id=csl_version_id,
-            prepared=prepared,
-            results=results,
-        )
+        with _writer_page_cache(db):
+            run = _execute(
+                db,
+                trigger=trigger,
+                party_ids=party_ids,
+                entry_ids=entry_ids,
+                csl_version_id=csl_version_id,
+                prepared=prepared,
+                results=results,
+            )
         db.commit()
         return run
     except Exception:
@@ -1083,15 +1103,16 @@ def process_pending_tasks(
             task.attempts += 1
             task.started_at = prepared.started_at
             task.last_error = None
-            run = _execute(
-                db,
-                trigger=trigger,
-                party_ids=active_party_ids,
-                entry_ids=entry_ids,
-                csl_version_id=task_version if trigger == "list_change" else None,
-                prepared=prepared,
-                results=results,
-            )
+            with _writer_page_cache(db):
+                run = _execute(
+                    db,
+                    trigger=trigger,
+                    party_ids=active_party_ids,
+                    entry_ids=entry_ids,
+                    csl_version_id=task_version if trigger == "list_change" else None,
+                    prepared=prepared,
+                    results=results,
+                )
             task.status = "complete"
             task.finished_at = utcnow()
             audit(

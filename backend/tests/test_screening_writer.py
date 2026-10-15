@@ -5,7 +5,12 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
 from app.audit import _safe
+from app.screening.engine import WRITER_PAGE_CACHE_KIB, _writer_page_cache
 from app.screening.writer import copy_tree
 
 
@@ -61,3 +66,18 @@ def test_safe_snapshot_conversion_is_unchanged():
         "features": [["token_set", 0.9], ["country", [1, {"US": True}]]],
         "observed_at": "2026-10-14T00:00:00+00:00",
     }
+
+
+def test_writer_page_cache_is_raised_only_while_the_writer_runs():
+    with Session(create_engine("sqlite://")) as db:
+
+        def cache_size():
+            return db.connection().exec_driver_sql("PRAGMA cache_size").scalar()
+
+        before = cache_size()
+        with _writer_page_cache(db):
+            assert cache_size() == -WRITER_PAGE_CACHE_KIB
+        assert cache_size() == before
+        with pytest.raises(RuntimeError), _writer_page_cache(db):
+            raise RuntimeError("synthetic writer failure")
+        assert cache_size() == before
