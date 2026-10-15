@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import sys
+from itertools import chain, islice
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +13,7 @@ from rapidfuzz.distance import LCSseq
 
 from app.screening.batch import score_rows
 from app.screening.bounds import NameBounds
-from app.screening.candidates import CandidateIndex
+from app.screening.candidates import FALLBACK_WINDOW, CandidateIndex
 from app.screening.score import below_minimum, names, party_features, score_pair
 from app.screening.settings import DEFAULT_WEIGHTS, ScreeningSettings
 
@@ -123,18 +124,29 @@ def test_batched_rows_are_bitwise_scalar_scores_for_any_worker_count():
             ]
 
 
-def test_fallback_scan_admits_exactly_what_extract_iter_admits():
-    settings = ScreeningSettings()
-    groups = list(recall_groups())
-    entries = {entry.id: entry for _, rows in groups for entry in rows}
-    index = CandidateIndex(list(entries.values()), settings)
+def extract_iter_admissions(variants, entries, settings):
+    """Entries the pre-batching fallback admitted: extract_iter over every name."""
     choices = {
         f"{entry.id}:{position}": variant
-        for entry in entries.values()
+        for entry in entries
         for position, variant in enumerate(
             variant for name in names(entry, settings, party=False) for variant in name.variants
         )
     }
+    return {
+        key.rsplit(":", 1)[0]
+        for variant in variants
+        for _, _, key in process.extract_iter(
+            variant, choices, scorer=fuzz.WRatio, score_cutoff=settings.candidate_min
+        )
+    }
+
+
+def test_fallback_scan_admits_exactly_what_extract_iter_admits():
+    settings = ScreeningSettings()
+    groups = list(recall_groups())
+    entries = list({entry.id: entry for _, rows in groups for entry in rows}.values())
+    index = CandidateIndex(entries, settings)
     variants = sorted(
         {
             variant
@@ -145,10 +157,163 @@ def test_fallback_scan_admits_exactly_what_extract_iter_admits():
     )
     index._scan(variants)
     for variant in variants:
-        expected = {
-            key.rsplit(":", 1)[0]
-            for _, _, key in process.extract_iter(
-                variant, choices, scorer=fuzz.WRatio, score_cutoff=settings.candidate_min
-            )
-        }
-        assert index.fallback_hits[variant] == expected
+        assert index.fallback_hits[variant] == extract_iter_admissions([variant], entries, settings)
+
+
+def company(identifier, name):
+    return SimpleNamespace(id=identifier, name=name, alt_names=[], entity_type="Entity")
+
+
+def party(identifier, name):
+    return SimpleNamespace(id=identifier, name=name, alt_names=[], party_type="company")
+
+
+def variants_of(record, settings):
+    return [v for name in names(record, settings, party=True) for v in name.variants]
+
+
+@pytest.mark.parametrize(
+    ("settings", "left", "right"),
+    [
+        # WRatio("a", "ab") is exactly 90; rapidfuzz's batch cutoff tolerance
+        # still admits it just above 90, as extract_iter always did.
+        (
+            ScreeningSettings(
+                candidate_min=90.00000000000001,
+                review_threshold=91,
+                likely_threshold=91,
+                auto_clear_threshold=91,
+                score_weights={**DEFAULT_WEIGHTS, "token_set": 0, "token_sort": 0, "partial": 1},
+            ),
+            "A",
+            "AB",
+        ),
+        # A zero cutoff admits zero scores too.
+        (ScreeningSettings(candidate_min=0), "Q", "Zzzz"),
+        # WRatio returns its scaled score 45.599999999999994 without rechecking
+        # the cutoff; the pair then scores 51.625 and is stored.
+        (ScreeningSettings(candidate_min=45.6), "shipping maria", "marine park"),
+        # The same tolerance on the repeated-token path that is always rescored.
+        (
+            ScreeningSettings(candidate_min=41.8),
+            "anna royal capital ali",
+            "abu lee abu aisha 4 mohammed",
+        ),
+    ],
+)
+def test_fallback_admission_matches_extract_iter_at_the_cutoff(settings, left, right):
+    entry, record = company("entry", right), party("party", left)
+    candidates, fallback = CandidateIndex([entry], settings).candidates(record)
+    assert fallback
+    admitted = extract_iter_admissions(variants_of(record, settings), [entry], settings)
+    assert {row.id for row in candidates} == admitted == {"entry"}
+
+
+@pytest.mark.parametrize(
+    ("settings", "left", "right", "country", "score"),
+    [
+        (ScreeningSettings(candidate_min=45.6), "shipping maria", "marine park", None, 51.625),
+        # extract_iter admits even a zero WRatio at this near-zero cutoff, and
+        # the country match alone then stores the pair.
+        (ScreeningSettings(candidate_min=1e-46), "qqqqq", "zzzzz", "US", 5.0),
+    ],
+)
+def test_boundary_fallback_admission_keeps_the_stored_pair(settings, left, right, country, score):
+    entry = SimpleNamespace(
+        id="e1",
+        name=right,
+        alt_names=[],
+        entity_type="Entity",
+        countries=[country] if country else [],
+        addresses=[],
+    )
+    record = SimpleNamespace(
+        id="p1",
+        name=left,
+        alt_names=[],
+        party_type="company",
+        country_iso2=country,
+        city=None,
+        address_lines=[],
+    )
+    candidates, fallback = CandidateIndex([entry], settings).candidates(record)
+    assert fallback and candidates == [entry]
+    assert score_pair(record, entry, settings).score == score >= settings.candidate_min
+
+
+def test_near_cutoff_fallback_rejection_matches_extract_iter():
+    # Batched WRatio keeps 57.49999999999999 at cutoff 57.5 where extract_iter
+    # rejects it; the pair would otherwise be stored at 59.9351.
+    settings = ScreeningSettings(candidate_min=57.5)
+    entry = SimpleNamespace(
+        id="e1",
+        name="umar logistics shipping services karamay",
+        alt_names=[],
+        entity_type="Entity",
+        countries=["US"],
+        addresses=[],
+    )
+    record = SimpleNamespace(
+        id="p1",
+        name="ramu scitsigol gnippihs services yamarak",
+        alt_names=[],
+        party_type="company",
+        country_iso2="US",
+        city=None,
+        address_lines=[],
+    )
+    candidates, fallback = CandidateIndex([entry], settings).candidates(record)
+    assert fallback and candidates == []
+    assert extract_iter_admissions(variants_of(record, settings), [entry], settings) == set()
+    assert score_pair(record, entry, settings).score == 59.9351
+
+
+@pytest.mark.parametrize("cutoff", [57.499999, 57.49999999999999, 57.5])
+def test_near_cutoff_batch_scores_defer_to_extract_iter(cutoff):
+    settings = ScreeningSettings(candidate_min=cutoff)
+    query = "holdings aero 8gbp3vmw emond import olga"
+    entry = company("entry", "sgnidloh orea wmv3pbg8 emond import olga")
+    (value,) = score_rows([query], ["sgnidloh orea wmv3pbg8 emond import olga"], fuzz.WRatio)[0]
+    assert value == 57.49999999999999
+    index = CandidateIndex([entry], settings)
+    index._scan([query])
+    assert index.fallback_hits[query] == extract_iter_admissions([query], [entry], settings)
+
+
+@pytest.mark.parametrize("cutoff", [1e-46, 1e-12, 1e-9, 1e-6, 0.001, 0.5, 0.999999, 1.0])
+def test_fallback_admission_below_one_matches_extract_iter(cutoff):
+    settings = ScreeningSettings(candidate_min=cutoff)
+    entries = [
+        company(f"e{n}", name)
+        for n, name in enumerate(["zzzzz", "qzzzz", "zzzzq", "qqzzz", "q z", "qqqqqqqqqqqqqqqqz"])
+    ]
+    for left in ("qqqqq", "q", "qq qq"):
+        record = party("party", left)
+        candidates, fallback = CandidateIndex(entries, settings).candidates(record)
+        assert fallback
+        assert {row.id for row in candidates} == extract_iter_admissions(
+            variants_of(record, settings), entries, settings
+        )
+
+
+def test_fallback_hits_stay_within_the_planned_window():
+    settings = ScreeningSettings()
+    # Digit-only names never block (no token of three characters, no phonetic
+    # code), so every party falls back and admits many short listings.
+    entries = [company(f"e{n}", f"{n % 7} {n % 5} {n % 3}") for n in range(400)]
+    parties = [party(f"p{n}", f"{n % 9} {n % 4} {n % 6} {n}") for n in range(3 * FALLBACK_WINDOW)]
+    index = CandidateIndex(entries, settings)
+    index.plan_fallbacks(parties)
+    assert len(index.planned) == len(parties)
+    unplanned = CandidateIndex(entries, settings)
+    for record in parties:
+        candidates, fallback = index.candidates(record)
+        assert fallback
+        assert candidates == unplanned.candidates(record)[0]
+        assert {row.id for row in candidates} == extract_iter_admissions(
+            variants_of(record, settings), entries, settings
+        )
+        window = set(chain.from_iterable(islice(index.planned, FALLBACK_WINDOW - 1)))
+        assert set(index.fallback_hits) <= window
+        assert not unplanned.fallback_hits
+    assert not index.planned and not index.fallback_hits

@@ -1,23 +1,31 @@
 """Token/phonetic blocking with a recall fallback over the complete name index."""
 
 from bisect import bisect_left, bisect_right
-from collections import defaultdict
-from collections.abc import Iterable, Iterator
-from itertools import compress, repeat
-from operator import mul
+from collections import defaultdict, deque
+from collections.abc import Iterable, Iterator, Sequence
+from itertools import chain, compress, islice, repeat
+from operator import mul, truth
 from typing import Any
 
 from metaphone import doublemetaphone
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
-from app.screening.batch import SLACK, WORKERS, score_rows
+from app.screening.batch import WORKERS, score_rows
 from app.screening.normalize import NormalizedName
 from app.screening.score import names
 from app.screening.settings import ScreeningSettings
 
-# Fallback queries scanned per rapidfuzz call; bounds the result buffer to a
-# few megabytes while giving every worker thread its own rows.
-FALLBACK_BATCH = 8 * WORKERS
+# Near score_cutoff, batched WRatio and extract_iter apply slightly different
+# tolerances: the normalized cutoff carries a small tolerance, and the
+# 0.95/0.9/0.6-scaled results are not rechecked against the original cutoff
+# (observed gaps are below 1e-5). Within this far wider margin of the cutoff,
+# names are always rescored and extract_iter decides their admission.
+FALLBACK_MARGIN = 0.01
+# Fallback parties whose names are scanned together, in batches of rows that
+# keep every worker busy. Admitted entries are held only for the parties in
+# this window, so memory never grows with the number of fallback parties.
+FALLBACK_WINDOW = 8 * WORKERS
+FALLBACK_ROWS = 2 * WORKERS
 
 
 class CandidateIndex:
@@ -32,6 +40,7 @@ class CandidateIndex:
         # strings score identically, so the fallback compares each only once.
         self.full_index: dict[str, set[str]] = defaultdict(set)
         self.fallback_hits: dict[str, set[str]] = {}
+        self.planned: deque[tuple[str, ...]] = deque()
         self.stopwords = set(settings.candidate_stopwords)
         # Kept for this index's lifetime: entry names outnumber the bounded
         # normalization cache, so later lookups would otherwise recompute them.
@@ -98,14 +107,6 @@ class CandidateIndex:
                     for code in doublemetaphone(tokens[0]):
                         yield self.phonetic.get(code, ())
 
-    def _falls_back(self, party_names: list[NormalizedName]) -> bool:
-        ids: set[str] = set()
-        for block in self._blocks(party_names):
-            ids.update(block)
-            if len(ids) >= 3:
-                return False
-        return True
-
     def _similar_band(self, shortest: int, longest: int) -> tuple[int, int]:
         """Positions of the names WRatio compares with both lengths as similar (< 1.5)."""
 
@@ -121,14 +122,56 @@ class CandidateIndex:
             return 0, 0
         return bisect_left(self.lengths, band[0]), bisect_right(self.lengths, band[-1])
 
+    def _falls_back(self, party_names: list[NormalizedName]) -> bool:
+        ids: set[str] = set()
+        for block in self._blocks(party_names):
+            ids.update(block)
+            if len(ids) >= 3:
+                return False
+        return True
+
     def _scan(self, variants: list[str]) -> None:
-        # WRatio with the same cutoff extract_iter applied; below-cutoff scores
-        # are returned as 0 and never admitted.
+        """Entries with a name that extract_iter(WRatio, score_cutoff=candidate_min) admits."""
         cutoff = self.settings.candidate_min
-        admits, could_admit = float(cutoff).__le__, (float(cutoff) - SLACK).__le__
+        if cutoff < 1:
+            # Near-zero cutoffs fall inside rapidfuzz's internal cutoff tolerance,
+            # where extract_iter may even admit zero scores. Such degenerate
+            # settings need no speed, so they use extract_iter itself.
+            for variant in variants:
+                self.fallback_hits[variant] = set().union(
+                    *(
+                        self.full_index[choice]
+                        for choice, _, _ in process.extract_iter(
+                            variant, self.choices, scorer=fuzz.WRatio, score_cutoff=cutoff
+                        )
+                    )
+                )
+            return
+
+        certain = float(cutoff) + FALLBACK_MARGIN
+
+        def admitted(variant: str, names: list[str], scores: Sequence[float]) -> list[str]:
+            # Batched WRatio reports names it rejects as 0, and extract_iter
+            # never admits those at a cutoff of one or more. Well above the
+            # cutoff a nonzero score is admitted outright; nearer it the batch
+            # and extract_iter tolerances differ in both directions, so
+            # extract_iter itself decides the few names there.
+            result: list[str] = []
+            near: list[str] = []
+            for position in compress(range(len(names)), map(truth, scores)):
+                (result if scores[position] >= certain else near).append(names[position])
+            result.extend(
+                choice
+                for choice, _, _ in process.extract_iter(
+                    variant, near, scorer=fuzz.WRatio, score_cutoff=cutoff
+                )
+            )
+            return result
+
+        could_admit = (float(cutoff) - FALLBACK_MARGIN).__le__
         variants = sorted(variants, key=len)
-        for start in range(0, len(variants), FALLBACK_BATCH):
-            batch = variants[start : start + FALLBACK_BATCH]
+        for start in range(0, len(variants), FALLBACK_ROWS):
+            batch = variants[start : start + FALLBACK_ROWS]
             repeated = any(len(set(v.split())) < len(v.split()) for v in batch)
             low, high = (0, 0) if repeated else self._similar_band(len(batch[0]), len(batch[-1]))
             others = self.choices[:low] + self.choices[high:]
@@ -136,6 +179,7 @@ class CandidateIndex:
             # For similar lengths WRatio is max(ratio, 0.95 * token_ratio), and
             # token_set_ratio equals the sorted-token ratio unless a token is
             # shared or repeated: an exact ceiling that excludes most names.
+            # Names within FALLBACK_MARGIN of the cutoff are still scored.
             ratios = score_rows(batch, self.choices[low:high], fuzz.ratio, workers=WORKERS)
             sorts = score_rows(
                 [" ".join(sorted(v.split())) for v in batch],
@@ -145,7 +189,7 @@ class CandidateIndex:
             )
             for variant, row, ratio_row, sort_row in zip(batch, rows, ratios, sorts, strict=True):
                 hits: set[str] = set()
-                for choice in compress(others, map(admits, row)):
+                for choice in admitted(variant, others, row):
                     hits.update(self.full_index[choice])
                 ceilings = map(max, ratio_row, map(mul, repeat(0.95), sort_row))
                 possible = set(compress(range(low, high), map(could_admit, ceilings)))
@@ -158,21 +202,21 @@ class CandidateIndex:
                 possible.update(p for p in self.repeated_tokens if low <= p < high)
                 exact = [self.choices[position] for position in sorted(possible)]
                 (scores,) = score_rows([variant], exact, fuzz.WRatio, score_cutoff=cutoff)
-                for choice in compress(exact, map(admits, scores)):
+                for choice in admitted(variant, exact, scores):
                     hits.update(self.full_index[choice])
                 self.fallback_hits[variant] = hits
 
-    def prefetch_fallbacks(self, parties: Iterable[Any]) -> None:
-        """Scan every fallback party's variants together so worker threads share them."""
-        pending: dict[str, None] = {}
+    def plan_fallbacks(self, parties: Iterable[Any]) -> None:
+        """Record, in screening order, the names of parties that will fall back.
+
+        Only names are kept; candidates() scans them a window at a time.
+        """
         for party in parties:
             party_names = names(party, self.settings, party=True)
             if self._falls_back(party_names):
-                for name in party_names:
-                    pending.update(
-                        dict.fromkeys(v for v in name.variants if v not in self.fallback_hits)
-                    )
-        self._scan(list(pending))
+                self.planned.append(
+                    tuple(dict.fromkeys(chain.from_iterable(name.variants for name in party_names)))
+                )
 
     def candidates(self, party: Any) -> tuple[list[Any], bool]:
         ids: set[str] = set()
@@ -181,9 +225,19 @@ class CandidateIndex:
             ids.update(block)
         fallback = len(ids) < 3
         if fallback:
-            for name in party_names:
-                # The fallback scans every name, not only already blocked candidates.
-                self._scan([v for v in name.variants if v not in self.fallback_hits])
-                for variant in name.variants:
-                    ids.update(self.fallback_hits[variant])
+            # The fallback scans every name, not only already blocked candidates.
+            variants = tuple(dict.fromkeys(chain.from_iterable(n.variants for n in party_names)))
+            if self.planned and self.planned[0] == variants:
+                self.planned.popleft()
+            ahead = list(islice(self.planned, FALLBACK_WINDOW - 1))
+            if any(v not in self.fallback_hits for v in variants):
+                pending = dict.fromkeys(chain(variants, *ahead))
+                self._scan([v for v in pending if v not in self.fallback_hits])
+            for variant in variants:
+                ids.update(self.fallback_hits[variant])
+            # Release what no party still inside the window needs.
+            needed = set(chain.from_iterable(ahead))
+            for variant in variants:
+                if variant not in needed:
+                    del self.fallback_hits[variant]
         return [self.entries[key] for key in sorted(ids)], fallback

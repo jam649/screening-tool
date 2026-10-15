@@ -561,7 +561,7 @@ def _prepare(
         )
     }
     index = CandidateIndex(entries, settings)
-    index.prefetch_fallbacks(parties)
+    index.plan_fallbacks(parties)
     # One immutable prepared snapshot per entry; actual persisted Hit snapshots
     # and inference inputs are still copied independently before use.
     entry_snapshots = {entry.id: snapshot(entry) for entry in entries}

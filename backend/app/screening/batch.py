@@ -1,11 +1,14 @@
 """Batched rapidfuzz comparisons without a numpy dependency.
 
 rapidfuzz's public ``process.cdist`` only wraps the compiled implementation's
-result matrix in numpy. That matrix exposes the buffer protocol itself, so
-reading it through ``memoryview`` yields exactly the values the scalar scorers
-return (verified bitwise on the matching fixtures) while the comparisons run
-in C++ with the GIL released. rapidfuzz is pinned exactly; the module tests
-fail loudly if this internal interface ever changes.
+result matrix in numpy. That matrix exposes the buffer protocol itself, so it
+is read through ``memoryview`` while the comparisons run in C++ with the GIL
+released. Without score_cutoff the values are bitwise those of the scalar
+scorers (verified on the matching fixtures). With score_cutoff they follow the
+batch semantics shared with ``process.extract_iter``, not the scalar scorers':
+a small internal tolerance may keep a score slightly below the cutoff, and
+rejected comparisons read as 0. rapidfuzz is pinned exactly; the module tests
+fail loudly if this internal interface or those semantics change.
 """
 
 import os
