@@ -561,12 +561,13 @@ def _prepare(
         )
     }
     index = CandidateIndex(entries, settings)
+    index.prefetch_fallbacks(parties)
     # One immutable prepared snapshot per entry; actual persisted Hit snapshots
     # and inference inputs are still copied independently before use.
     entry_snapshots = {entry.id: snapshot(entry) for entry in entries}
     # Normalized comparison inputs live only for this snapshot; each entry's
     # are derived on first use, exactly when score_pair would first need them.
-    name_bounds = NameBounds(settings)
+    name_bounds = NameBounds(settings, index.names)
     pairs: dict[str, list[PreparedPair]] = {}
     candidate_counts = {}
     for party in parties:

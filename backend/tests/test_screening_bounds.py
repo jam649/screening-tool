@@ -7,11 +7,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 from rapidfuzz.distance import LCSseq
 
 from app.screening.batch import score_rows
 from app.screening.bounds import NameBounds
+from app.screening.candidates import CandidateIndex
 from app.screening.score import below_minimum, names, party_features, score_pair
 from app.screening.settings import DEFAULT_WEIGHTS, ScreeningSettings
 
@@ -120,3 +121,34 @@ def test_batched_rows_are_bitwise_scalar_scores_for_any_worker_count():
             assert [[typed(value) for value in row] for row in rows] == [
                 [typed(value) for value in row] for row in expected
             ]
+
+
+def test_fallback_scan_admits_exactly_what_extract_iter_admits():
+    settings = ScreeningSettings()
+    groups = list(recall_groups())
+    entries = {entry.id: entry for _, rows in groups for entry in rows}
+    index = CandidateIndex(list(entries.values()), settings)
+    choices = {
+        f"{entry.id}:{position}": variant
+        for entry in entries.values()
+        for position, variant in enumerate(
+            variant for name in names(entry, settings, party=False) for variant in name.variants
+        )
+    }
+    variants = sorted(
+        {
+            variant
+            for party, _ in groups
+            for name in names(party, settings, party=True)
+            for variant in name.variants
+        }
+    )
+    index._scan(variants)
+    for variant in variants:
+        expected = {
+            key.rsplit(":", 1)[0]
+            for _, _, key in process.extract_iter(
+                variant, choices, scorer=fuzz.WRatio, score_cutoff=settings.candidate_min
+            )
+        }
+        assert index.fallback_hits[variant] == expected
